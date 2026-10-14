@@ -4,6 +4,36 @@ All notable changes to PackMerger are documented here. The format is loosely
 based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the
 project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+Delivery reliability: every player gets the pack, every time, and the pack that is
+advertised is always the pack that is served.
+
+### Fixed
+- **Returning players got no pack.** The persistent player cache skipped the send on rejoin when the hash matched, but the client drops server packs on disconnect, so those players played without the pack (and `required` was never applied to them). The pack is now sent on every join; the client's own SHA-1 cache still avoids re-downloading an unchanged pack.
+- **Every merge was a "new pack".** Zip entries carried the current time, so identical content produced a different SHA-1 each merge (notify/resend spam, client re-downloads, S3 object churn). Merged and staged plugin zips are now deterministic (sorted entries, fixed timestamps).
+- **Hash/URL mismatch window.** The new SHA-1 was advertised before the upload finished, and a failed upload left the new hash paired with the old URL. The `(URL, SHA-1, pack UUID)` record is now published as one unit only after the upload succeeds; a failed upload keeps the previous pack live (and fires `PackUploadFailedEvent`). Self-host serves a snapshot (`output/.self-host/<sha1>.zip`), so a running merge never changes the bytes behind an advertised hash, and `upload()` fails instead of advertising a URL when the HTTP server could not bind.
+- **No pack after a restart or `/pm reload` until a merge succeeded.** The existing merged pack is now re-published immediately on startup and after `/pm reload`, so validation rollback really keeps the previous pack live, and self-host no longer answers 503 after a reload. The self-host HTTP server keeps running through `/pm reload` when its port is unchanged.
+- **Players who joined before the first merge never got the pack** (with the default `on-new-pack: notify`). They are now sent it as soon as the first pack is published.
+- **Pack stacking and stripping other packs.** The pack UUID was derived from the hash, so add-mode stacked a new copy next to the stale one, and replace mode called `clearResourcePacks()`, removing packs sent by the proxy or other plugins. PackMerger now uses one stable UUID per server (`nameUUIDFromBytes("packmerger:" + server-name)`) and only ever removes its own pack.
+- **Status handling ignored the pack id.** A status report for another plugin's pack was treated as PackMerger's. Reports are now filtered by PackMerger's pack UUID.
+- Config/README drift: `/pm merge` (use `/pm reload`), `debug: false` (the key is `log-level`), the provider list now includes `s3`, and the rollback comment no longer says "once enabled in 1.1.0".
+
+### Added
+- **Self-heal resend**: `FAILED_DOWNLOAD` or `DISCARDED` triggers a resend after `distribution.retry.delay-ticks` (default 40), at most `distribution.retry.max-attempts` (default 3) times per session. `INVALID_URL` and `FAILED_RELOAD` are not retried; a specific diagnosis is logged instead.
+- **`distribution.enforce-required`** (default off): with `required: true`, kick players who decline the pack, or whose download still fails after the retries, with a configurable MiniMessage `kick-message`.
+- **`distribution.skip-bedrock-players`** (default `true`): Floodgate (Bedrock) players are not sent the Java pack. Detected through the Floodgate API when Floodgate is installed.
+- `config-version` is now 3.
+
+### Changed
+- **`distribution.cache` was removed.** Existing configs keep working; the section is ignored and a one-line notice suggests deleting it. `plugins/PackMerger/cache/player-cache.json` is no longer read or written and can be deleted.
+- **`use-add-resource-pack: false` no longer clears every server pack.** It removes PackMerger's own previous pack and sends the new one; packs from a proxy or other plugins stay applied. `true` sends without the explicit removal (the stable UUID makes the client replace PackMerger's pack in place).
+- **`distribution.required` only sets the client flag**, as before, but the config no longer claims that players are kicked; enable `enforce-required` for that.
+- **Bedrock players no longer receive the Java pack** by default (`skip-bedrock-players: true`).
+- `PackSentToPlayerEvent` is fired on the player's region thread; `bypassedCache()` now means "forced send" (`/pm apply`, `on-new-pack: resend`, self-heal resend, or the first publish reaching an early joiner).
+- `getCurrentPackUrl()` / `getCurrentPackSha1Hex()` describe the published pack and always change together.
+- A re-merge with identical content logs `Merged pack SHA1: <sha1> (unchanged)` and does not trigger `on-new-pack`.
+
 ## [1.2.0] — 2026-06-18
 
 Brings PackMerger onto the 2026 Minecraft/Paper line, adds automatic discovery of

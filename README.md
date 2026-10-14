@@ -33,7 +33,7 @@ A Paper plugin that merges multiple Minecraft resource packs into a single pack,
 - **Bedrock / Geyser conversion** (opt-in, experimental) — converts the merged pack's custom item icons into a Bedrock pack + Geyser custom-item mappings so Bedrock players see the same custom items, with optional auto-deploy into Geyser's folders
 - **Network-wide distribution** (optional) — a companion Velocity proxy plugin (`packmerger-velocity`) offers the merged pack to players from the proxy; backends can push live URL/hash updates to it over a plugin channel
 - **Hot reload** — watches the packs folder for changes and auto-merges with configurable debounce
-- **Player cache tracking** — remembers which pack version each player has downloaded to skip redundant re-sends on rejoin
+- **Reliable delivery** — the pack is sent on every join under one stable per-server pack UUID (it replaces only PackMerger's own pack, never a proxy's or another plugin's); players who join before the first merge get the pack as soon as it is published; failed downloads are re-sent automatically (bounded); the previous pack is served immediately on startup and through `/pm reload`; identical content always produces the same SHA-1; optional kick enforcement for required packs; Bedrock (Floodgate) players are skipped
 - **Per-server packs** — supports multi-server networks where each backend needs a different pack composition
 - **Pack validation** — checks JSON syntax, pack.mcmeta structure, and missing texture/model references after every merge
 - **Custom overrides** — drop a `pack.mcmeta` or `pack.png` in the packs folder to override the merged pack's metadata and icon
@@ -138,7 +138,7 @@ merge:
 ```yaml
 upload:
   auto-upload: true              # Upload after every merge
-  provider: "self-host"          # "self-host" or "polymath"
+  provider: "self-host"          # "self-host", "s3" or "polymath"
 ```
 
 #### Self-Host (Default)
@@ -174,24 +174,29 @@ To self-host Polymath, you need Python installed. See the [Polymath GitHub repo]
 ```yaml
 distribution:
   enabled: true                    # Send pack to players on join
-  required: false                  # Kick players who decline (true/false)
+  required: false                  # Client "required" flag (no "proceed without" button); kicks nobody by itself
+  enforce-required:
+    enabled: false                 # With required: true, kick players who decline / can't download after retries
+    kick-message: "<red>This server requires its resource pack.</red> <gray>Rejoin and accept it to play.</gray>"
   prompt-message: ""               # Custom MiniMessage prompt (empty = Minecraft default)
-  use-add-resource-pack: false     # true = add alongside existing packs; false = replace
+  use-add-resource-pack: false     # false = remove PackMerger's previous pack, then send; true = send only (same UUID replaces in place)
   join-delay-ticks: 20             # Delay before sending (20 ticks = 1 second)
-  cache:
-    enabled: true                  # Skip re-sending to players who already have current pack
+  retry:
+    max-attempts: 3                # Re-sends per session after FAILED_DOWNLOAD / DISCARDED (0 = off)
+    delay-ticks: 40                # Delay before each re-send
+  skip-bedrock-players: true       # Don't send the Java pack to Floodgate (Bedrock) players
   on-new-pack:
     action: "notify"               # "none", "notify", or "resend"
     notify-message: "<yellow>[PackMerger]</yellow> <gray>A new resource pack is available. Rejoin or use F3+T to reload.</gray>"
 ```
 
-### Debug
+### Logging
 
 ```yaml
-debug: false
+log-level: "info"                  # "debug", "info", "warning" or "error"
 ```
 
-Enables verbose logging for troubleshooting. Logs every file merge, pack send, validation check, and file watcher event.
+`debug` enables verbose logging for troubleshooting. Logs every file merge, pack send, resource-pack status, validation check, and file watcher event.
 
 ## Commands & Permissions
 
@@ -236,8 +241,8 @@ All commands require `packmerger.admin` permission (default: op).
    - **pack.mcmeta** preserves both `overlays.entries[]` and `filter.block[]` from every pack — deduped by `directory` and by `namespace|path` respectively
 4. **Override** — if `pack.mcmeta` or `pack.png` exists directly in the packs folder (not inside a pack), it replaces whatever the merge produced
 5. **Validate** — the merged zip is checked for pack.mcmeta structure, JSON syntax errors, and missing texture/model references
-6. **Upload** — the merged zip is sent to the configured provider (Polymath or self-host)
-7. **Distribute** — if the pack's SHA-1 hash changed, online players are handled according to the `on-new-pack` action
+6. **Upload & publish** — the merged zip is sent to the configured provider (self-host, S3 or Polymath). Only once that succeeds does the new `(URL, SHA-1, pack UUID)` go live, as one unit; if the upload fails, players keep getting the previous pack and `PackUploadFailedEvent` fires
+7. **Distribute** — players who joined before any pack existed are sent it now; if the pack's SHA-1 changed, online players are handled according to the `on-new-pack` action. The zip is written deterministically (sorted entries, fixed timestamps), so a re-merge of identical content has the same SHA-1 and is not a "new pack"
 
 ### Priority Order & Conflict Resolution
 
@@ -399,17 +404,25 @@ On a multi-server network, each backend server can have its own merged pack by d
 
 When enabled, a background thread watches the `packs/` folder for file system events (create, modify, delete). To avoid excessive re-merges during bulk operations, events are **debounced** — the merge only triggers after no new events have arrived for the configured debounce period (default: 5 seconds).
 
-### Player Cache Tracking
+### Delivery
 
-After a player successfully loads a resource pack, the plugin records the pack's SHA-1 hash against their UUID in `plugins/PackMerger/cache/player-cache.json`. On subsequent joins, if the player's cached hash matches the current pack hash, the download is skipped entirely. The cache is saved to disk every 5 minutes and on plugin disable.
+- **Every join gets the pack.** The Minecraft client drops server packs when it disconnects, so PackMerger sends the pack on every join. The client caches downloads by SHA-1, so an unchanged pack is applied from its cache without downloading again.
+- **Stable pack identity.** The pack UUID is `UUID.nameUUIDFromBytes("packmerger:" + server-name)`: the same across merges and restarts, different per backend. Sending a new pack replaces PackMerger's own pack in place; packs sent by a proxy or other plugins are never removed.
+- **Early joiners.** A player who joins before the first pack is published is remembered and sent the pack the moment it is published (regardless of `on-new-pack.action`).
+- **Available from the first second.** On startup, and after `/pm reload`, the merged pack already in `output/` is published again right away, before the (delayed) merge. The self-host HTTP server keeps running through `/pm reload` when its port is unchanged, and it serves a snapshot (`output/.self-host/<sha1>.zip`), so a merge in progress never changes the bytes behind the advertised SHA-1.
+- **Self-heal.** If a client reports `FAILED_DOWNLOAD` or `DISCARDED` for PackMerger's pack, it is sent again after `retry.delay-ticks`, at most `retry.max-attempts` times per session. `INVALID_URL` and `FAILED_RELOAD` are not retried; the console explains what to check instead. Status reports for other plugins' packs are ignored.
+- **Required packs.** `required: true` sets the client flag. With `enforce-required.enabled: true`, PackMerger also kicks players who decline, or whose download still fails after the retries.
+- **Bedrock players.** With Floodgate installed, Bedrock players are not sent the Java pack (`skip-bedrock-players`).
 
 ## Troubleshooting
 
 ### Merged pack not sending to players
 
 - Check that `distribution.enabled` is `true` in config
-- Verify a merge has completed: run `/pm status` and check that Pack URL is not "N/A"
-- Check the console for upload errors — if the upload failed, no URL is available to send
+- Verify a pack is published: run `/pm status` and check that Pack URL is not "N/A"
+- Check the console for upload errors — if the very first upload failed, no URL is available to send (players who joined meanwhile get the pack as soon as one is published)
+- Look for `giving up`, `INVALID_URL` or `FAILED_RELOAD` warnings: they name the player and what to check
+- Bedrock (Floodgate) players are skipped on purpose (`distribution.skip-bedrock-players`)
 - Ensure `upload.auto-upload` is `true`
 
 ### Self-host port already in use
@@ -474,13 +487,11 @@ value is whatever the highest-priority `pack.mcmeta` says.
 - For unzipped packs, try re-saving the pack's root directory or touching a file in the `packs/` folder
 - Check the console for "File watcher key invalidated" — this means the packs directory was deleted or moved while the watcher was running
 
-### Players re-downloading the pack every join (cache issue)
+### Players download the pack again after every merge
 
-- Ensure `distribution.cache.enabled` is `true`
-- The cache only updates after the client reports `SUCCESSFULLY_LOADED` — if the client reports a different status, no cache entry is saved
-- If using `use-add-resource-pack: true`, Minecraft may handle caching differently than the replace mode
-- Delete `plugins/PackMerger/cache/player-cache.json` to reset the cache if it becomes corrupted
-- Enable `debug: true` to see detailed pack send/skip logs per player
+- Since 1.3.0 merged zips are byte-identical when their content is unchanged, so the SHA-1 only changes when a pack really changed, and clients re-use their cached download otherwise
+- If the SHA-1 still changes on every merge, one of your source packs changes on every build (for example a plugin that regenerates its zip with new content); compare two `/pm inspect export` reports
+- The old `distribution.cache` setting is gone: it skipped sending the pack on rejoin, which left returning players with no pack at all (the client drops server packs on disconnect). Remove the section from older configs and delete `plugins/PackMerger/cache/player-cache.json`
 
 ### Pack too large / download timeouts
 
