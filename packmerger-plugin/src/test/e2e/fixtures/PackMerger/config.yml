@@ -1,6 +1,8 @@
 # PackMerger config for the plugwright E2E server. Staged into
 # plugins/PackMerger/config.yml before every run. Everything that would reach
 # the internet (update check, remote packs, plugin-pack discovery) is off.
+# plugin-packs.spec.ts flips the "# e2e:" marked lines to exercise discovery
+# against the fake plugin output in plugins/PmE2EFake/.
 config-version: 4
 server-name: "e2e"
 priority:
@@ -8,10 +10,26 @@ priority:
   - "base-pack"
 remote-packs: {}
 plugin-packs:
-  enabled: false
+  enabled: false # e2e:plugin-packs
   # Delays the startup merge so distribution.spec's first bot joins before any pack exists.
   # build.gradle rewrites this to 0 for filtered runs that don't include distribution.spec.
   merge-delay-seconds: 15
+  watch:
+    enabled: true
+    interval-seconds: 1
+  stability:
+    polls: 2
+    interval-millis: 300
+  sources:
+    # Operator-defined adapters: a cluster of two packs gated on PackMerger
+    # itself (always installed) and a folder that is not a pack.
+    e2e-fake:
+      enabled: true # e2e:fake-source
+      plugin: "PackMerger"
+      path: "PmE2EFake/resource_pack"
+      cluster: true
+    e2e-broken:
+      path: "PmE2EFake/not_a_pack"
 # Profiles are defined but none is active, so the root-level priority applies.
 active-profile: ""
 profiles:

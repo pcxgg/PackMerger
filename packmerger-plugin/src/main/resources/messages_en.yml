@@ -30,6 +30,7 @@ status.sha1: "<gray>SHA1: <white>{hash}</white></gray>"
 status.pack-size: "<gray>Pack Size: <white>{size}</white></gray>"
 status.merging: "<gray>Merging: <white>{status}</white></gray>"
 status.packs-in-folder: "<gray>Packs in folder: <white>{count}</white></gray>"
+status.plugin-packs: "<gray>Plugin packs: <white>{packs}</white></gray>"
 
 # Apply
 apply.no-pack: "<red>No merged pack available. Run a merge first.</red>"

@@ -19,6 +19,15 @@ import com.google.gson.JsonObject;
 public interface MergeStrategy {
 
     /**
+     * Regex fragment for an optional overlay directory in front of {@code assets/}.
+     * Overlays ({@code pack.mcmeta overlays.entries[].directory}) mirror the pack
+     * root, so {@code <overlay>/assets/<ns>/models/x.json} needs the same merge
+     * semantics as {@code assets/<ns>/models/x.json}. Strategies prepend this to
+     * their {@code assets/...} patterns.
+     */
+    String OVERLAY_PREFIX = "(?:[^/]+/)?";
+
+    /**
      * @param path the normalized pack-relative file path (e.g. {@code assets/minecraft/models/item/iron_sword.json})
      * @return {@code true} if this strategy should handle the given path
      */

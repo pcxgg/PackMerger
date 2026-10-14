@@ -129,6 +129,9 @@ public final class InspectRenderer {
             out.add("  <white>" + rec.path() + "</white> <gray>[" + rec.contributors().size() + " contributors]</gray>");
             out.add("    <yellow>winner:</yellow> <white>" + rec.winner() + "</white>"
                     + (rec.wasMerged() ? " <green>(strategy: " + rec.strategyName() + ")</green>" : ""));
+            for (String note : rec.notes()) {
+                out.add("    <gold>note:</gold> <gray>" + escape(note) + "</gray>");
+            }
             shown++;
         }
         return out;
@@ -183,8 +186,16 @@ public final class InspectRenderer {
                         line.append(rec.wasMerged() ? "  [merged:" : "  [strategy:").append(rec.strategyName()).append("]");
                     }
                     out.add(line.toString());
+                    for (String note : rec.notes()) {
+                        out.add("      note: " + note);
+                    }
                 });
         return out;
+    }
+
+    /** Neutralises MiniMessage tags in free text (pack names and paths come from disk). */
+    private static String escape(String text) {
+        return text.replace("<", "\\<");
     }
 
     private static void addTruncated(List<String> out, List<String> items, String prefix, String suffix) {

@@ -9,6 +9,62 @@ project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 Delivery reliability: every player gets the pack, every time, and the pack that is
 advertised is always the pack that is served. Self-hosting works out of the box, and
 tells you exactly what to fix when it can't.
+Plugin packs are discovered from many more plugins and re-merged when a plugin
+rebuilds its pack, and colliding item definitions, models and overlays are merged
+the way the client actually reads them.
+
+### Added
+- **Self-heal resend**: `FAILED_DOWNLOAD` or `DISCARDED` triggers a resend after `distribution.retry.delay-ticks` (default 40), at most `distribution.retry.max-attempts` (default 3) times per session. `INVALID_URL` and `FAILED_RELOAD` are not retried; a specific diagnosis is logged instead.
+- **`distribution.enforce-required`** (default off): with `required: true`, kick players who decline the pack, or whose download still fails after the retries, with a configurable MiniMessage `kick-message`.
+- **`distribution.skip-bedrock-players`** (default `true`): Floodgate (Bedrock) players are not sent the Java pack. Detected through the Floodgate API when Floodgate is installed.
+- **Reachability verification** (`upload.self-host.verify`, default `true`): after every upload the first KiB of the pack is fetched from `127.0.0.1:<port>` and from the advertised URL and compared byte for byte (the latter catches closed ports, missing NAT hairpinning and misrouted proxies). It runs off the main thread, and the new pack is only served at `/pack` once it is published (the check uses a one-off `?pm-verify=` token), so the advertised SHA-1 always matches what `/pack` serves. Failures are logged, sent to online admins and shown in `/pm status`.
+- **`upload.fallback`** (default `[]`): providers to publish through, in order, when `upload.provider` fails to upload or (self-host) fails verification or has a non-routable auto host, e.g. `["s3"]`. If nothing better works, a self-host URL that failed its check is still used rather than sending no pack.
+- **`upload.self-host.public-host`**: host name or IP for the auto-built URL.
+- **`upload.self-host.detect-public-ip`** (default `false`) and `public-ip-services`: opt-in lookup of the server's public IP. This contacts a third party (by default Amazon checkip, then ipify), which learns the server's IP; it runs once per start/reload and only when `public-url` and `public-host` are empty.
+- **`/pm status`** shows the hosting route (and why a fallback was used), the self-host port and whether it is listening, the resolved host and where it came from (with the exact setting to change when it is not routable), and the last verification result with its reason and time.
+- Admins (`packmerger.admin`) get a notice a few seconds after joining when players probably can't download the pack.
+- Self-host warns when its port is out of range, equals the Minecraft port, or collides with `rcon.port`/`query.port` (when enabled).
+- `messages_en.yml` keys missing from an older copy on disk now fall back to the bundled text instead of showing the raw key.
+
+- **13 more plugin-pack integrations**: Nova, BetterHUD, ValhallaMMO, vane-core,
+  BackpackPlus, BetterStructures, CannonRTP, EternalTD, InfiniteVehicles,
+  MegaBlockSurvivors and ResurrectionChest from disk, plus MMOInventory and
+  RealisticSurvival, whose packs are downloaded from the author's published link
+  only while the plugin is installed (opt out with
+  `plugin-packs.sources.<alias>.enabled: false`).
+- **Cluster sources**: a folder holding several packs is unioned into one staged
+  pack (lang/atlas/sounds/model JSON merged, first pack wins other clashes).
+  Folders of packs are detected automatically; `cluster: true` forces it.
+- **Operator-defined adapters**: any alias under `plugin-packs.sources` that is not
+  built in becomes an adapter (`plugin`, `path` (string or list), `cluster`,
+  `enabled`), so new plugins need no release. Built-ins accept the same keys, and
+  `url` for the two download-only plugins.
+- **Plugin pack watcher** (`plugin-packs.watch.enabled`, `interval-seconds`,
+  default on / 5 s): polls the resolved source paths and re-merges when a plugin
+  rebuilds its pack, so `/oraxen reload`-style rebuilds no longer need a `/pm`
+  command.
+- **Stability check** (`plugin-packs.stability.polls` / `interval-millis`, default
+  3 / 1000): a changed source is copied only once its size and mtime hold steady,
+  so half-written zips are never staged; a still-changing source is retried.
+- **`/pm merge`**: re-stages plugin packs, merges and uploads without reloading the
+  config. It was documented before but did not exist.
+- `/pm status` lists the plugin packs merged on the last pass.
+- ItemsAdder zip protection and `compress-json-files` are detected and reported in
+  the admin advisory.
+
+- **`merge.model-policy`** (`whole-file` | `deep`) controls how colliding models
+  and blockstates are combined. See "Changed" for the new default.
+- **Merge notes in provenance**: every collision warning and automatic rewrite a
+  merge strategy makes is stored with the file in the provenance sidecar and shown
+  by `/pm inspect collisions` and `/pm inspect export`. The console prints one
+  summary line per merge.
+- **Overlay format repair**: when two packs' overlay lists are combined and any
+  entry reaches format 64 or below, entries that only declare
+  `min_format`/`max_format` gain the matching `formats` range, which 1.21.9+
+  clients require for the list to load. The merged `pack.mcmeta` also declares the
+  union of both packs' format ranges in a consistent shape (`min_format`/
+  `max_format`, plus `supported_formats` and an in-range `pack_format` when the
+  range reaches format 64 or below).
 
 ### Fixed
 - **Returning players got no pack.** The persistent player cache skipped the send on rejoin when the hash matched, but the client drops server packs on disconnect, so those players played without the pack (and `required` was never applied to them). The pack is now sent on every join; the client's own SHA-1 cache still avoids re-downloading an unchanged pack.
@@ -23,22 +79,39 @@ tells you exactly what to fix when it can't.
 - **No check that the pack could actually be downloaded.** See "Reachability verification" below.
 - **Self-host HTTP handler**: `/pack` was a prefix match (`/packfoo` served the pack), `HEAD` returned 405, and there was no `ETag`, `If-None-Match` or `Range` support. Now: exact path matching, `GET`/`HEAD`, strong SHA-1 `ETag` with `304`, single-range `206`/`416`, `Cache-Control: no-cache`; the rate limiter is unchanged (HEAD and 304 don't take a download slot). A download streams from the file it opened, so publishing a new pack mid-download can't break it, and old snapshots that are still open (Windows) no longer make the upload fail.
 - The self-host request threads are shut down with the HTTP server (they leaked on every provider switch).
-- Config/README drift: `/pm merge` (use `/pm reload`), `debug: false` (the key is `log-level`), the provider list now includes `s3`, and the rollback comment no longer says "once enabled in 1.1.0".
+- Config/README drift: `debug: false` (the key is `log-level`), the provider list now includes `s3`, and the rollback comment no longer says "once enabled in 1.1.0". (`/pm merge`, which the docs already mentioned, now exists; see Added.)
 
-### Added
-- **Self-heal resend**: `FAILED_DOWNLOAD` or `DISCARDED` triggers a resend after `distribution.retry.delay-ticks` (default 40), at most `distribution.retry.max-attempts` (default 3) times per session. `INVALID_URL` and `FAILED_RELOAD` are not retried; a specific diagnosis is logged instead.
-- **`distribution.enforce-required`** (default off): with `required: true`, kick players who decline the pack, or whose download still fails after the retries, with a configurable MiniMessage `kick-message`.
-- **`distribution.skip-bedrock-players`** (default `true`): Floodgate (Bedrock) players are not sent the Java pack. Detected through the Floodgate API when Floodgate is installed.
-- `config-version` is now 3.
-- **Reachability verification** (`upload.self-host.verify`, default `true`): after every upload the first KiB of the pack is fetched from `127.0.0.1:<port>` and from the advertised URL and compared byte for byte (the latter catches closed ports, missing NAT hairpinning and misrouted proxies). It runs off the main thread, and the new pack is only served at `/pack` once it is published (the check uses a one-off `?pm-verify=` token), so the advertised SHA-1 always matches what `/pack` serves. Failures are logged, sent to online admins and shown in `/pm status`.
-- **`upload.fallback`** (default `[]`): providers to publish through, in order, when `upload.provider` fails to upload or (self-host) fails verification or has a non-routable auto host, e.g. `["s3"]`. If nothing better works, a self-host URL that failed its check is still used rather than sending no pack.
-- **`upload.self-host.public-host`**: host name or IP for the auto-built URL.
-- **`upload.self-host.detect-public-ip`** (default `false`) and `public-ip-services`: opt-in lookup of the server's public IP. This contacts a third party (by default Amazon checkip, then ipify), which learns the server's IP; it runs once per start/reload and only when `public-url` and `public-host` are empty.
-- **`/pm status`** shows the hosting route (and why a fallback was used), the self-host port and whether it is listening, the resolved host and where it came from (with the exact setting to change when it is not routable), and the last verification result with its reason and time.
-- Admins (`packmerger.admin`) get a notice a few seconds after joining when players probably can't download the pack.
-- Self-host warns when its port is out of range, equals the Minecraft port, or collides with `rcon.port`/`query.port` (when enabled).
-- `messages_en.yml` keys missing from an older copy on disk now fall back to the bundled text instead of showing the raw key.
-- `config-version` is now 4.
+- **1.21.4+ item definitions are merged correctly.** Two packs defining the same
+  `items/*.json` as `range_dispatch` on the same property now keep both packs'
+  `entries` (unioned by threshold, sorted, higher priority wins a shared threshold
+  with a warning naming both packs); `select` nodes on the same property have
+  their `cases` unioned by `when`; matching `fallback` nodes are merged too.
+  Before, the lower-priority pack's entries were silently dropped, and mismatched
+  node types produced an invalid hybrid with both `cases` and `entries`.
+  Non-combinable files now go to the higher-priority pack whole, with a warning.
+- **Overlay directories are merged format-aware.** `<overlay>/assets/...` files used
+  to bypass every merge strategy (plain overwrite); they now get the same lang,
+  model, item-definition, atlas, font, sounds and blockstate handling as `assets/`.
+- **Legacy `overrides` are sorted by `custom_model_data`** after merging (entries
+  without one first), so CMD thresholds from different packs resolve correctly.
+- **Hot reload sees nested edits.** The `packs/` watcher now watches every folder
+  inside it (dot-folders excluded), so editing a file inside an unzipped pack
+  folder triggers a merge.
+- **EliteMobs and FreeMinecraftModels** are read from their current locations:
+  `EliteMobs/resource_pack` (a folder of packs) and
+  `FreeMinecraftModels/output/FreeMinecraftModels.zip` plus the
+  `FreeMinecraftModels/resource_pack` folder of packs. The old paths stay as
+  fallbacks.
+- **Broken fallbacks removed**: `Nexo/pack/assets`, `ItemsAdder/contents` and
+  `Oraxen/pack` produced packs with nothing usable at the root. Every staged
+  source is now validated (`pack.mcmeta` or `assets/` at the root; a zip wrapped in
+  one folder is unwrapped); a source that fails is skipped, logged, and listed in
+  the admin advisory.
+- **Stale staged packs no longer merge**: disabling an adapter, removing the
+  plugin, or deleting its output now deletes `packs/.plugin-packs/<alias>.zip`;
+  turning `plugin-packs.enabled` off clears the folder. Cached downloads in
+  `packs/.remote-cache/` whose alias was removed from `remote-packs` are deleted
+  too.
 
 ### Changed
 - **`upload.self-host.port` defaults to `-1` (Minecraft port + 1)** instead of `8080`. Configs that set a port explicitly (the generated config.yml always did, with `8080`) keep that port; only a config without the key moves to Minecraft port + 1. On hosting panels, allocate that port (or set an allocated one).
@@ -50,6 +123,24 @@ tells you exactly what to fix when it can't.
 - `PackSentToPlayerEvent` is fired on the player's region thread; `bypassedCache()` now means "forced send" (`/pm apply`, `on-new-pack: resend`, self-heal resend, or the first publish reaching an early joiner).
 - `getCurrentPackUrl()` / `getCurrentPackSha1Hex()` describe the published pack and always change together.
 - A re-merge with identical content logs `Merged pack SHA1: <sha1> (unchanged)` and does not trigger `on-new-pack`.
+
+- **Default model/blockstate merge is now whole-file** (`merge.model-policy:
+  whole-file`). When two packs ship the same model or blockstate, the
+  higher-priority file wins whole; only model `overrides` and blockstate
+  `multipart` (when both files use it) are still combined. The old key-by-key deep
+  merge could build broken hybrids (an `item/generated` model inheriting another
+  pack's `elements`, a blockstate with both `variants` and `multipart`). Configs
+  without the key get the new default; add `merge.model-policy: deep` to keep the
+  previous output.
+- `config-version` is now 4 (was 2). New keys: `distribution.enforce-required`,
+  `distribution.retry`, `distribution.skip-bedrock-players`,
+  `upload.self-host.public-host`, `detect-public-ip`, `public-ip-services`,
+  `verify`, `upload.fallback`, `plugin-packs.watch`, `plugin-packs.stability`,
+  the extra `plugin-packs.sources` keys and `merge.model-policy`. All default
+  safely when missing; `distribution.cache` was removed.
+- The plugin-pack watcher is **on by default**. It only reads file sizes and
+  timestamps; set `plugin-packs.watch.enabled: false` to get the old behaviour
+  (re-stage only on merge).
 
 ## [1.2.0] — 2026-06-18
 

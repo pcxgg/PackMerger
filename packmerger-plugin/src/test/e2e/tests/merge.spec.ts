@@ -15,10 +15,12 @@ test('self-host provider serves the merged pack whose SHA-1 matches /pm status',
 test('overlapping packs are merged format-aware with the higher-priority pack winning', async () => {
   const pack = await downloadPack();
   expect([...pack.entries.keys()].sort()).toEqual([
+    'assets/minecraft/items/paper.json',
     'assets/minecraft/lang/en_us.json',
     'assets/minecraft/models/item/stick.json',
     'assets/pmtest/marker.txt',
     'pack.mcmeta',
+    'pm_overlay/assets/minecraft/lang/en_us.json',
   ]);
 
   // Language files: key union, overlay-pack (priority 1) wins the shared key.
@@ -28,11 +30,12 @@ test('overlapping packs are merged format-aware with the higher-priority pack wi
     'pmtest.shared': 'Shared from overlay',
   });
 
-  // Models: deep merge, conflicting keys from the higher-priority pack.
-  const stick = entryJson(pack, 'assets/minecraft/models/item/stick.json');
-  expect(stick.parent).toBe('minecraft:item/generated');
-  expect(stick.gui_light).toBe('front');
-  expect(stick.display.thirdperson_righthand.scale).toEqual([1.5, 1.5, 1.5]);
+  // Models: under the default merge.model-policy (whole-file) the higher-priority
+  // model wins whole; base-pack's gui_light and parent do not leak into it.
+  expect(entryJson(pack, 'assets/minecraft/models/item/stick.json')).toEqual({
+    parent: 'minecraft:item/generated',
+    display: { thirdperson_righthand: { scale: [1.5, 1.5, 1.5] } },
+  });
 
   // Non-JSON files: last write wins, i.e. the higher-priority pack.
   expect(entryText(pack, 'assets/pmtest/marker.txt').trim()).toBe('overlay');
@@ -42,6 +45,52 @@ test('overlapping packs are merged format-aware with the higher-priority pack wi
   expect(mcmeta.pack.description).toBe('PackMerger E2E overlay pack');
   expect(mcmeta.pack.min_format).toBe(84);
   expect(mcmeta.pack.max_format).toBe(84);
+});
+
+test('1.21.4+ item definitions: range_dispatch entries are unioned by threshold', async () => {
+  const pack = await downloadPack();
+  const paper = entryJson(pack, 'assets/minecraft/items/paper.json');
+  expect(paper.model.type).toBe('minecraft:range_dispatch');
+  expect(paper.model.property).toBe('minecraft:custom_model_data');
+  expect(paper.model.cases).toBeUndefined();
+  // Sorted by threshold; the shared threshold 1000 goes to overlay-pack (higher priority),
+  // base-pack's unique thresholds 1 and 2000 survive.
+  expect(paper.model.entries.map((e: any) => [e.threshold, e.model.model])).toEqual([
+    [1, 'pmtest:item/base_coin'],
+    [5, 'pmtest:item/overlay_topaz'],
+    [1000, 'pmtest:item/overlay_ruby'],
+    [2000, 'pmtest:item/base_gun'],
+  ]);
+  expect(paper.model.fallback.model).toBe('minecraft:item/paper');
+});
+
+test('overlay directories get the same format-aware merge, and overlay formats are completed', async () => {
+  const pack = await downloadPack();
+  expect(entryJson(pack, 'pm_overlay/assets/minecraft/lang/en_us.json')).toEqual({
+    'pmtest.overlay_dir.from_base': 'Overlay dir from base',
+    'pmtest.overlay_dir.from_overlay': 'Overlay dir from overlay',
+    'pmtest.overlay_dir.shared': 'Overlay dir shared from overlay',
+  });
+
+  // base-pack's list reaches format 64, so every combined entry needs "formats":
+  // overlay-pack's pm_overlay entry (which won the directory) gains one.
+  const entries = entryJson(pack, 'pack.mcmeta').overlays.entries;
+  expect(entries.map((e: any) => e.directory)).toEqual(['pm_overlay', 'pm_legacy']);
+  expect(entries[0].formats).toEqual({ min_inclusive: 84, max_inclusive: 84 });
+  expect(entries[1].formats).toEqual([46, 64]);
+});
+
+test('/pm inspect collisions shows the item-definition threshold clash with both pack names', async ({ player, server }) => {
+  await player.makeOp();
+  const since = player.getMessageBufferIndex();
+  player.chat('/pm inspect collisions');
+  await expect(player).toHaveReceivedMessage('assets/minecraft/items/paper.json', { since });
+  await expect(player).toHaveReceivedMessage(
+    /note: .*threshold 1000 is defined by both overlay-pack and base-pack; overlay-pack wins/, { since });
+  await expect(player).toHaveReceivedMessage(/note: .*added a 'formats' range to 1 overlay entry/, { since });
+  // The warning is logged by the merge (the startup one at the latest), so read the log from server start.
+  await expect(server).toHaveReceivedMessage(
+    /Item definition collision in assets\/minecraft\/items\/paper\.json: .*overlay-pack and base-pack/, { since: 0 });
 });
 
 test('/pm validate passes a clean 26.1-format pack', async ({ player }) => {

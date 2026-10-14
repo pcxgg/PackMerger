@@ -1,0 +1,11 @@
+{
+  "model": {
+    "type": "minecraft:range_dispatch",
+    "property": "minecraft:custom_model_data",
+    "entries": [
+      { "threshold": 1000, "model": { "type": "minecraft:model", "model": "pmtest:item/overlay_ruby" } },
+      { "threshold": 5, "model": { "type": "minecraft:model", "model": "pmtest:item/overlay_topaz" } }
+    ],
+    "fallback": { "type": "minecraft:model", "model": "minecraft:item/paper" }
+  }
+}

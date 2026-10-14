@@ -3,7 +3,10 @@ package sh.pcx.packmerger.merge;
 import sh.pcx.packmerger.PackMergerBootstrap;
 
 import java.io.IOException;
+import java.io.UncheckedIOException;
 import java.nio.file.*;
+import java.util.HashMap;
+import java.util.Map;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicLong;
 import sh.pcx.packmerger.PluginLogger;
@@ -56,15 +59,19 @@ public class FileWatcher {
      * Starts the file watcher on a dedicated daemon thread.
      *
      * <p>If already running, this method is a no-op. The watcher registers for
-     * CREATE, MODIFY, and DELETE events on the packs folder. Events are debounced
-     * using a timestamp-based approach: each relevant event updates a "last event time"
-     * counter, and the merge only fires when the polling loop detects that the debounce
-     * period has elapsed since the last event.</p>
+     * CREATE, MODIFY, and DELETE events on the packs folder <em>and every directory
+     * below it</em> (except dot-directories such as {@code .remote-cache/} and
+     * {@code .plugin-packs/}, which PackMerger writes itself), so editing a file deep
+     * inside an unzipped pack folder triggers a merge too. Directories created later
+     * are registered as they appear. Events are debounced using a timestamp-based
+     * approach: each relevant event updates a "last event time" counter, and the
+     * merge only fires when the polling loop detects that the debounce period has
+     * elapsed since the last event.</p>
      */
     public void start() {
         if (running.get()) return;
 
-        Path packsPath = plugin.getPacksFolder().toPath();
+        Path packsPath = plugin.getPacksFolder().toPath().toAbsolutePath().normalize();
         if (!packsPath.toFile().exists()) {
             packsPath.toFile().mkdirs();
         }
@@ -73,13 +80,10 @@ public class FileWatcher {
         watchThread = new Thread(() -> {
             try {
                 watchService = FileSystems.getDefault().newWatchService();
-                // Register for all three event types on the packs directory
-                packsPath.register(watchService,
-                        StandardWatchEventKinds.ENTRY_CREATE,
-                        StandardWatchEventKinds.ENTRY_MODIFY,
-                        StandardWatchEventKinds.ENTRY_DELETE);
+                Map<WatchKey, Path> watchedDirs = new HashMap<>();
+                registerTree(packsPath, packsPath, watchedDirs);
 
-                logger.info("File watcher started for: " + packsPath);
+                logger.info("File watcher started for: " + packsPath + " (" + watchedDirs.size() + " folder(s))");
 
                 // Debounce state: tracks the timestamp of the last relevant file event.
                 // When this is non-zero and the debounce period elapses, a merge is triggered.
@@ -107,29 +111,28 @@ public class FileWatcher {
                         continue;
                     }
 
-                    // Process all events in this batch
+                    Path dir = watchedDirs.get(key);
                     boolean hasRelevantEvent = false;
                     for (WatchEvent<?> event : key.pollEvents()) {
                         WatchEvent.Kind<?> kind = event.kind();
-                        // OVERFLOW events indicate the OS event buffer overflowed — skip them
-                        if (kind == StandardWatchEventKinds.OVERFLOW) continue;
-
-                        Path changed = (Path) event.context();
-                        String fileName = changed.toString();
-
-                        // Skip dot-prefixed entries (includes .remote-cache/ which
-                        // PackMerger manages itself — we don't want its downloads
-                        // to trigger cascading merges)
-                        if (fileName.startsWith(".")) continue;
-
-                        // Only consider pack-related file changes:
-                        // - pack.mcmeta and pack.png (custom overrides)
-                        // - .zip files (pack archives)
-                        // - directories (unzipped packs, detected by having no file extension)
-                        if (fileName.equals("pack.mcmeta") || fileName.equals("pack.png") ||
-                                fileName.endsWith(".zip") || !fileName.contains(".")) {
+                        // OVERFLOW: the OS dropped events. Something changed, so merge.
+                        if (kind == StandardWatchEventKinds.OVERFLOW) {
                             hasRelevantEvent = true;
-                            logger.debug("File change detected: " + kind.name() + " " + fileName);
+                            continue;
+                        }
+                        if (dir == null) continue;
+
+                        Path changed = dir.resolve((Path) event.context());
+                        Path relative = packsPath.relativize(changed);
+                        if (isRelevant(relative)) {
+                            hasRelevantEvent = true;
+                            logger.debug("File change detected: " + kind.name() + " " + relative);
+                        }
+                        // Watch directories that appear later (a pack folder moved in,
+                        // or a new sub-folder inside one).
+                        if (kind == StandardWatchEventKinds.ENTRY_CREATE && Files.isDirectory(changed)
+                                && !hasDotSegment(relative)) {
+                            registerTree(changed, packsPath, watchedDirs);
                         }
                     }
 
@@ -144,9 +147,13 @@ public class FileWatcher {
                     // Reset the watch key so we continue receiving events
                     boolean valid = key.reset();
                     if (!valid) {
-                        // The watched directory was deleted or became inaccessible
-                        logger.warning("File watcher key invalidated, stopping watcher");
-                        break;
+                        watchedDirs.remove(key);
+                        if (packsPath.equals(dir)) {
+                            // The packs folder itself was deleted or became inaccessible
+                            logger.warning("File watcher key invalidated, stopping watcher");
+                            break;
+                        }
+                        // A nested folder was deleted; its parent reported the deletion.
                     }
                 }
             } catch (ClosedWatchServiceException e) {
@@ -159,6 +166,50 @@ public class FileWatcher {
         // Daemon thread so it doesn't prevent server shutdown
         watchThread.setDaemon(true);
         watchThread.start();
+    }
+
+    /**
+     * Whether a change at {@code relative} (relative to the packs folder) should
+     * trigger a merge. Anything under a dot-prefixed segment is ignored (PackMerger's
+     * own {@code .remote-cache/} and {@code .plugin-packs/} staging, editor swap
+     * files). At the top level only pack-shaped entries count: the custom
+     * {@code pack.mcmeta}/{@code pack.png} overrides, {@code .zip} archives and
+     * directories (names without an extension). Inside a pack folder every file counts.
+     */
+    static boolean isRelevant(Path relative) {
+        if (relative.toString().isEmpty() || hasDotSegment(relative)) return false;
+        if (relative.getNameCount() > 1) return true;
+        String fileName = relative.toString();
+        return fileName.equals("pack.mcmeta") || fileName.equals("pack.png")
+                || fileName.endsWith(".zip") || !fileName.contains(".");
+    }
+
+    private static boolean hasDotSegment(Path relative) {
+        for (Path segment : relative) {
+            if (segment.toString().startsWith(".")) return true;
+        }
+        return false;
+    }
+
+    /** Registers {@code start} and every non-dot directory below it. */
+    private void registerTree(Path start, Path root, Map<WatchKey, Path> watchedDirs) {
+        try (var dirs = Files.walk(start)) {
+            dirs.filter(Files::isDirectory)
+                    .filter(d -> d.equals(root) || !hasDotSegment(root.relativize(d)))
+                    .forEach(d -> {
+                        try {
+                            WatchKey k = d.register(watchService,
+                                    StandardWatchEventKinds.ENTRY_CREATE,
+                                    StandardWatchEventKinds.ENTRY_MODIFY,
+                                    StandardWatchEventKinds.ENTRY_DELETE);
+                            watchedDirs.put(k, d);
+                        } catch (IOException e) {
+                            logger.debug("File watcher could not watch " + d + ": " + e.getMessage());
+                        }
+                    });
+        } catch (IOException | UncheckedIOException e) {
+            logger.debug("File watcher could not scan " + start + ": " + e.getMessage());
+        }
     }
 
     /**

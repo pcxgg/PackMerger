@@ -9,14 +9,14 @@ test('/pm inspect summarises the last merge', async ({ player }) => {
   await expect(player).toHaveReceivedMessage('Pack order (highest priority first):');
   await expect(player).toHaveReceivedMessage(/^\s*1\. overlay-pack$/);
   await expect(player).toHaveReceivedMessage(/^\s*2\. base-pack$/);
-  await expect(player).toHaveReceivedMessage('Total files: 4, collisions: 4, JSON merged: 3');
+  await expect(player).toHaveReceivedMessage('Total files: 6, collisions: 6, JSON merged: 5');
 });
 
 test('/pm inspect collisions lists every path touched by both packs', async ({ player }) => {
   await player.makeOp();
   player.chat('/pm inspect collisions');
   await expect(player).toHaveReceivedMessage('Inspect: collisions');
-  await expect(player).toHaveReceivedMessage('4 file(s) contributed by two or more packs.');
+  await expect(player).toHaveReceivedMessage('6 file(s) contributed by two or more packs.');
   await expect(player).toHaveReceivedMessage('assets/minecraft/lang/en_us.json');
   await expect(player).toHaveReceivedMessage('assets/pmtest/marker.txt');
 });
@@ -25,11 +25,11 @@ test('/pm inspect <pack> shows what a pack won and lost', async ({ player }) => 
   await player.makeOp();
   player.chat('/pm inspect overlay-pack');
   await expect(player).toHaveReceivedMessage('Inspect: overlay-pack');
-  await expect(player).toHaveReceivedMessage(/Won: 4\s+Contributed but overridden: 0/);
+  await expect(player).toHaveReceivedMessage(/Won: 6\s+Contributed but overridden: 0/);
 
   player.chat('/pm inspect base-pack');
   await expect(player).toHaveReceivedMessage('Inspect: base-pack');
-  await expect(player).toHaveReceivedMessage(/Won: 0\s+Contributed but overridden: 4/);
+  await expect(player).toHaveReceivedMessage(/Won: 0\s+Contributed but overridden: 6/);
   await expect(player).toHaveReceivedMessage('assets/pmtest/marker.txt → overlay-pack');
 });
 

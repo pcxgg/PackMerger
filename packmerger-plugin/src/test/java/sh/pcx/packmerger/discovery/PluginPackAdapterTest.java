@@ -7,7 +7,9 @@ import java.io.File;
 import java.io.IOException;
 import java.nio.file.Files;
 import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.HashSet;
+import java.util.Map;
 import java.util.List;
 import java.util.Set;
 import java.util.zip.ZipEntry;
@@ -20,8 +22,8 @@ class PluginPackAdapterTest {
     @Test
     void resolveSource_firstExistingCandidateWins(@TempDir File plugins) throws IOException {
         // Adapter with two candidates; only the second exists.
-        PluginPackAdapter a = new PluginPackAdapter("x", "X",
-                List.of("X/pack.zip", "X/pack"));
+        PluginPackAdapter a = PluginPackAdapter.local("x", "X",
+                PluginPackAdapter.Source.pack("X/pack.zip", "X/pack"));
         File dir = new File(plugins, "X/pack");
         assertTrue(dir.mkdirs());
 
@@ -37,7 +39,7 @@ class PluginPackAdapterTest {
 
     @Test
     void resolveSource_overrideRelativeAndAbsolute(@TempDir File plugins) throws IOException {
-        PluginPackAdapter a = new PluginPackAdapter("x", "X", List.of("X/default.zip"));
+        PluginPackAdapter a = PluginPackAdapter.local("x", "X", PluginPackAdapter.Source.pack("X/default.zip"));
 
         // Relative override resolves against the plugins folder.
         File custom = new File(plugins, "custom/my.zip");
@@ -53,7 +55,7 @@ class PluginPackAdapterTest {
 
     @Test
     void resolveSource_nothingFound_returnsNull(@TempDir File plugins) {
-        PluginPackAdapter a = new PluginPackAdapter("x", "X", List.of("X/pack.zip"));
+        PluginPackAdapter a = PluginPackAdapter.local("x", "X", PluginPackAdapter.Source.pack("X/pack.zip"));
         assertNull(a.resolveSource(plugins, null));
         assertNull(a.resolveSource(plugins, "does/not/exist.zip"));
     }
@@ -64,7 +66,8 @@ class PluginPackAdapterTest {
         List<String> aliases = new ArrayList<>();
         for (PluginPackAdapter a : adapters) {
             aliases.add(a.alias());
-            assertFalse(a.candidatePaths().isEmpty(), a.alias() + " must declare candidate paths");
+            assertTrue(!a.candidatePaths().isEmpty() || a.isRemote(),
+                    a.alias() + " must declare candidate paths or a url");
             assertNotNull(a.pluginName());
         }
         assertTrue(aliases.containsAll(List.of(
@@ -75,44 +78,115 @@ class PluginPackAdapterTest {
     }
 
     @Test
-    void zipDirectory_producesEntriesWithForwardSlashes(@TempDir File tmp) throws IOException {
-        File src = new File(tmp, "src");
-        assertTrue(new File(src, "assets/minecraft/models/item").mkdirs());
-        Files.writeString(new File(src, "pack.mcmeta").toPath(), "{}");
-        Files.writeString(new File(src, "assets/minecraft/models/item/stick.json").toPath(), "{}");
+    void builtIns_coverEveryKnownPackPlugin() {
+        Map<String, PluginPackAdapter> byAlias = new HashMap<>();
+        for (PluginPackAdapter a : PluginPackAdapter.builtIns()) byAlias.put(a.alias(), a);
+        assertTrue(byAlias.keySet().containsAll(List.of(
+                "nova", "betterhud", "valhallammo", "vane", "backpackplus", "betterstructures",
+                "cannonrtp", "eternaltd", "infinitevehicles", "megablocksurvivors", "resurrectionchest",
+                "mmoinventory", "realisticsurvival")), byAlias.keySet().toString());
 
-        File zip = new File(tmp, "out.zip");
-        PluginPackManager.zipDirectory(src, zip);
-
-        Set<String> entries = new HashSet<>();
-        try (ZipFile zf = new ZipFile(zip)) {
-            var e = zf.entries();
-            while (e.hasMoreElements()) {
-                ZipEntry entry = e.nextElement();
-                entries.add(entry.getName());
-            }
+        assertEquals("vane-core", byAlias.get("vane").pluginName());
+        assertTrue(byAlias.get("mmoinventory").isRemote());
+        assertTrue(byAlias.get("realisticsurvival").url().startsWith("https://"));
+        assertTrue(firstCandidate(byAlias.get("elitemobs")).cluster(), "EliteMobs writes a folder of packs");
+        assertEquals("EliteMobs/resource_pack", firstCandidate(byAlias.get("elitemobs")).path());
+        assertEquals(2, byAlias.get("freeminecraftmodels").sources().size(), "FMM: generated zip + extra-pack cluster");
+        assertEquals("FreeMinecraftModels/output/FreeMinecraftModels.zip",
+                firstCandidate(byAlias.get("freeminecraftmodels")).path());
+        assertEquals(List.of("MegaBlockSurvivors/resourcepack", "MegaBlockSurvivors/resource_pack"),
+                byAlias.get("megablocksurvivors").candidatePaths());
+        for (String cluster : List.of("betterstructures", "cannonrtp", "eternaltd", "resurrectionchest")) {
+            assertTrue(firstCandidate(byAlias.get(cluster)).cluster(), cluster);
         }
-        assertTrue(entries.contains("pack.mcmeta"));
-        assertTrue(entries.contains("assets/minecraft/models/item/stick.json"),
-                "entries must use forward slashes relative to the dir root: " + entries);
     }
+
     @Test
-    void zipDirectory_isByteIdenticalForUnchangedContent(@TempDir File tmp) throws Exception {
-        File src = new File(tmp, "src");
-        assertTrue(new File(src, "assets/minecraft/lang").mkdirs());
-        Files.writeString(new File(src, "pack.mcmeta").toPath(), "{}");
-        Files.writeString(new File(src, "assets/minecraft/lang/en_us.json").toPath(), "{\"a\":\"b\"}");
+    void builtIns_dropTheBrokenFallbacks() {
+        Map<String, PluginPackAdapter> byAlias = new HashMap<>();
+        for (PluginPackAdapter a : PluginPackAdapter.builtIns()) byAlias.put(a.alias(), a);
+        assertEquals(List.of("Oraxen/pack/pack.zip"), byAlias.get("oraxen").candidatePaths());
+        assertEquals(List.of("Nexo/pack/pack.zip"), byAlias.get("nexo").candidatePaths());
+        assertEquals(List.of("ItemsAdder/output/generated.zip"), byAlias.get("itemsadder").candidatePaths());
+    }
 
-        File first = new File(tmp, "first.zip");
-        PluginPackManager.zipDirectory(src, first);
-        // Touch the sources so their mtimes change; content stays the same.
-        for (File f : List.of(new File(src, "pack.mcmeta"), new File(src, "assets/minecraft/lang/en_us.json"))) {
-            assertTrue(f.setLastModified(f.lastModified() + 120_000));
-        }
-        Thread.sleep(1_100);
-        File second = new File(tmp, "second.zip");
-        PluginPackManager.zipDirectory(src, second);
+    @Test
+    void resolve_returnsEverySourceThatExists(@TempDir File plugins) throws IOException {
+        PluginPackAdapter fmm = PluginPackAdapter.builtIns().stream()
+                .filter(a -> a.alias().equals("freeminecraftmodels")).findFirst().orElseThrow();
+        assertTrue(fmm.resolve(plugins).isEmpty());
 
-        assertArrayEquals(Files.readAllBytes(first.toPath()), Files.readAllBytes(second.toPath()));
+        File cluster = new File(plugins, "FreeMinecraftModels/resource_pack");
+        assertTrue(cluster.mkdirs());
+        assertEquals(1, fmm.resolve(plugins).size());
+        assertTrue(fmm.resolve(plugins).get(0).cluster());
+
+        File zip = new File(plugins, "FreeMinecraftModels/output/FreeMinecraftModels.zip");
+        assertTrue(zip.getParentFile().mkdirs());
+        Files.writeString(zip.toPath(), "z");
+        List<PluginPackAdapter.ResolvedSource> both = fmm.resolve(plugins);
+        assertEquals(2, both.size());
+        assertEquals(zip.getAbsolutePath(), both.get(0).file().getAbsolutePath());
+        assertFalse(both.get(0).cluster());
+    }
+
+    @Test
+    void withOverride_replacesPathsKeepsClusterModeAndGate() {
+        PluginPackAdapter em = PluginPackAdapter.local("elitemobs", "EliteMobs",
+                PluginPackAdapter.Source.cluster("EliteMobs/resource_pack"));
+
+        PluginPackAdapter moved = em.withOverride(new PluginPackAdapter.PluginPackOverride(
+                true, null, List.of("EliteMobs/new_place"), null, null));
+        assertEquals(List.of("EliteMobs/new_place"), moved.candidatePaths());
+        assertTrue(firstCandidate(moved).cluster(), "cluster mode is inherited from the built-in");
+        assertEquals("EliteMobs", moved.pluginName());
+
+        PluginPackAdapter single = em.withOverride(new PluginPackAdapter.PluginPackOverride(
+                true, "EliteMobsFork", List.of("a.zip", "b.zip"), false, null));
+        assertEquals(List.of("a.zip", "b.zip"), single.candidatePaths());
+        assertFalse(firstCandidate(single).cluster());
+        assertEquals("EliteMobsFork", single.pluginName());
+
+        PluginPackAdapter onlyEnabledFlag = em.withOverride(new PluginPackAdapter.PluginPackOverride(
+                false, null, List.of(), null, null));
+        assertEquals(em.candidatePaths(), onlyEnabledFlag.candidatePaths());
+
+        PluginPackAdapter mmo = PluginPackAdapter.remote("mmoinventory", "MMOInventory", "https://old.example/p.zip");
+        assertEquals("https://new.example/p.zip", mmo.withOverride(new PluginPackAdapter.PluginPackOverride(
+                true, null, List.of(), null, "https://new.example/p.zip")).url());
+        PluginPackAdapter local = mmo.withOverride(new PluginPackAdapter.PluginPackOverride(
+                true, null, List.of("MMOInventory/pack.zip"), null, null));
+        assertFalse(local.isRemote(), "a local path wins over the download");
+    }
+
+    @Test
+    void custom_operatorDefinedAdapters() {
+        assertNull(PluginPackAdapter.custom("nothing", new PluginPackAdapter.PluginPackOverride(
+                true, "Some", List.of(), null, null)), "an adapter needs a path or url");
+
+        PluginPackAdapter mine = PluginPackAdapter.custom("MyPack", new PluginPackAdapter.PluginPackOverride(
+                true, "MyPlugin", List.of("MyPlugin/generated"), true, null));
+        assertEquals("mypack", mine.alias());
+        assertEquals("MyPlugin", mine.pluginName());
+        assertTrue(firstCandidate(mine).cluster());
+
+        PluginPackAdapter ungated = PluginPackAdapter.custom("shared", new PluginPackAdapter.PluginPackOverride(
+                true, " ", List.of("/srv/shared/pack.zip"), null, null));
+        assertNull(ungated.pluginName(), "no plugin: always active while the path exists");
+    }
+
+    @Test
+    void resolvePath_relativeToPluginsFolderIncludingParent(@TempDir File root) throws IOException {
+        File plugins = new File(root, "plugins");
+        assertTrue(plugins.mkdirs());
+        File serverRootZip = new File(root, "vane-resource-pack.zip");
+        Files.writeString(serverRootZip.toPath(), "z");
+        PluginPackAdapter vane = PluginPackAdapter.builtIns().stream()
+                .filter(a -> a.alias().equals("vane")).findFirst().orElseThrow();
+        assertEquals(serverRootZip.getCanonicalPath(), vane.resolve(plugins).get(0).file().getCanonicalPath());
+    }
+
+    private static PluginPackAdapter.Candidate firstCandidate(PluginPackAdapter a) {
+        return a.sources().get(0).candidates().get(0);
     }
 }

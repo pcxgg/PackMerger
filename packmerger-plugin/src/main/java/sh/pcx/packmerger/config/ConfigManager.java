@@ -1,9 +1,11 @@
 package sh.pcx.packmerger.config;
 
+import sh.pcx.packmerger.merge.strategy.ModelPolicy;
 import org.bukkit.Bukkit;
 import org.bukkit.configuration.ConfigurationSection;
 import org.bukkit.configuration.file.FileConfiguration;
 import sh.pcx.packmerger.PackMergerBootstrap;
+import sh.pcx.packmerger.discovery.PluginPackAdapter;
 import sh.pcx.packmerger.remote.RemoteSpec;
 
 import java.io.File;
@@ -91,8 +93,20 @@ public class ConfigManager {
      *  have finished generating their packs. */
     private int pluginPacksMergeDelaySeconds;
 
-    /** Per-alias overrides (enable flag + optional source path); absent = defaults. */
-    private final Map<String, PluginPackSetting> pluginPackSettings = new HashMap<>();
+    /** Per-alias overrides and operator-defined adapters; absent = built-in defaults. */
+    private final Map<String, PluginPackAdapter.PluginPackOverride> pluginPackOverrides = new java.util.LinkedHashMap<>();
+
+    /** Whether resolved plugin source paths are polled for changes (auto re-merge). */
+    private boolean pluginPacksWatchEnabled;
+
+    /** Seconds between plugin source polls. */
+    private int pluginPacksWatchIntervalSeconds;
+
+    /** Identical size+mtime readings required before a changed source is copied. */
+    private int pluginPacksStabilityPolls;
+
+    /** Milliseconds between those readings. */
+    private long pluginPacksStabilityIntervalMillis;
 
     // -------------------------------------------------------------------------
     // Bedrock (Geyser) conversion
@@ -119,6 +133,12 @@ public class ConfigManager {
 
     /** Whether to strip junk/hidden files (e.g. .DS_Store, Thumbs.db) from the merged output. */
     private boolean stripJunkFiles;
+
+    /**
+     * How models and blockstates are combined when two packs ship the same file
+     * ({@code merge.model-policy}). Defaults to whole-file since config-version 4.
+     */
+    private ModelPolicy modelPolicy = ModelPolicy.WHOLE_FILE;
 
     /** ZIP compression level (0-9). Higher = smaller file but slower compression. */
     private int compressionLevel;
@@ -375,6 +395,14 @@ public class ConfigManager {
         sizeWarningMb = config.getInt("merge.optimization.size-warning-mb", 100);
         hotReloadEnabled = config.getBoolean("merge.hot-reload.enabled", true);
         hotReloadDebounceSeconds = config.getInt("merge.hot-reload.debounce-seconds", 5);
+        String rawModelPolicy = config.getString("merge.model-policy", ModelPolicy.WHOLE_FILE.configValue());
+        ModelPolicy parsedModelPolicy = ModelPolicy.parse(rawModelPolicy);
+        if (parsedModelPolicy == null) {
+            plugin.getLogger().log(Level.WARNING, "merge.model-policy '" + rawModelPolicy
+                    + "' is not one of whole-file, deep; using whole-file.");
+            parsedModelPolicy = ModelPolicy.WHOLE_FILE;
+        }
+        modelPolicy = parsedModelPolicy;
 
         // Upload settings
         autoUpload = config.getBoolean("upload.auto-upload", true);
@@ -479,16 +507,31 @@ public class ConfigManager {
         // plugins (Oraxen, Nexo, ItemsAdder, …). Per-alias overrides are optional.
         pluginPacksEnabled = config.getBoolean("plugin-packs.enabled", true);
         pluginPacksMergeDelaySeconds = config.getInt("plugin-packs.merge-delay-seconds", 10);
-        pluginPackSettings.clear();
+        pluginPacksWatchEnabled = config.getBoolean("plugin-packs.watch.enabled", true);
+        pluginPacksWatchIntervalSeconds = Math.max(1, config.getInt("plugin-packs.watch.interval-seconds", 5));
+        pluginPacksStabilityPolls = Math.max(1, config.getInt("plugin-packs.stability.polls", 3));
+        pluginPacksStabilityIntervalMillis = Math.max(0, config.getLong("plugin-packs.stability.interval-millis", 1000));
+        pluginPackOverrides.clear();
         ConfigurationSection pluginSources = config.getConfigurationSection("plugin-packs.sources");
         if (pluginSources != null) {
             for (String alias : pluginSources.getKeys(false)) {
                 ConfigurationSection s = pluginSources.getConfigurationSection(alias);
                 if (s == null) continue;
-                boolean enabled = s.getBoolean("enabled", true);
-                String path = s.getString("path", "");
-                pluginPackSettings.put(alias.toLowerCase(),
-                        new PluginPackSetting(enabled, path.isEmpty() ? null : path));
+                List<String> paths = new ArrayList<>();
+                if (s.isList("path")) {
+                    for (String p : s.getStringList("path")) if (!p.isBlank()) paths.add(p);
+                } else {
+                    String path = s.getString("path", "");
+                    if (!path.isBlank()) paths.add(path);
+                }
+                Boolean cluster = s.isSet("cluster") ? s.getBoolean("cluster") : null;
+                pluginPackOverrides.put(alias.toLowerCase(java.util.Locale.ROOT),
+                        new PluginPackAdapter.PluginPackOverride(
+                                s.getBoolean("enabled", true),
+                                s.getString("plugin", null),
+                                paths,
+                                cluster,
+                                s.getString("url", null)));
             }
         }
 
@@ -617,10 +660,22 @@ public class ConfigManager {
     /** @return seconds to wait after enable before the first auto-merge (default 10) */
     public int getPluginPacksMergeDelaySeconds() { return pluginPacksMergeDelaySeconds; }
 
-    /** @return the per-alias override for a plugin pack, or {@code null} to use adapter defaults */
-    public PluginPackSetting getPluginPackSetting(String alias) {
-        return pluginPackSettings.get(alias.toLowerCase());
+    /** @return every {@code plugin-packs.sources.<alias>} block, keyed by lower-case alias */
+    public Map<String, PluginPackAdapter.PluginPackOverride> getPluginPackOverrides() {
+        return pluginPackOverrides;
     }
+
+    /** @return {@code true} (default) if plugin source paths are polled for changes */
+    public boolean isPluginPacksWatchEnabled() { return pluginPacksWatchEnabled; }
+
+    /** @return seconds between plugin source polls (default 5, minimum 1) */
+    public int getPluginPacksWatchIntervalSeconds() { return pluginPacksWatchIntervalSeconds; }
+
+    /** @return identical readings required before a changed source is copied (default 3) */
+    public int getPluginPacksStabilityPolls() { return pluginPacksStabilityPolls; }
+
+    /** @return milliseconds between stability readings (default 1000) */
+    public long getPluginPacksStabilityIntervalMillis() { return pluginPacksStabilityIntervalMillis; }
 
     // -------------------------------------------------------------------------
     // Getters — Bedrock
@@ -647,6 +702,8 @@ public class ConfigManager {
 
     /** @return {@code true} if junk files should be stripped from the merged output */
     public boolean isStripJunkFiles() { return stripJunkFiles; }
+    /** @return how colliding models and blockstates are combined ({@code merge.model-policy}) */
+    public ModelPolicy getModelPolicy() { return modelPolicy; }
 
     /** @return ZIP compression level (0-9) */
     public int getCompressionLevel() { return compressionLevel; }
@@ -808,16 +865,6 @@ public class ConfigManager {
      * @param exclude    list of pack filenames to exclude from merging on this server
      */
     public record ServerPackConfig(List<String> additional, List<String> exclude) {}
-
-    /**
-     * Per-plugin override for auto-discovery (the {@code plugin-packs.sources.<alias>}
-     * block). {@code path} (relative to {@code plugins/}, or absolute) overrides the
-     * adapter's default source location; {@code null} uses the built-in candidates.
-     *
-     * @param enabled whether this plugin's pack should be staged
-     * @param path    explicit source path override, or {@code null} for defaults
-     */
-    public record PluginPackSetting(boolean enabled, String path) {}
 
     /**
      * S3-compatible upload configuration. One record covers AWS S3, Cloudflare R2,

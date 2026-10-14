@@ -5,6 +5,9 @@ import com.google.gson.JsonObject;
 import org.junit.jupiter.api.Test;
 import sh.pcx.packmerger.merge.JsonMerger;
 
+import java.util.ArrayList;
+import java.util.List;
+
 import static org.junit.jupiter.api.Assertions.*;
 
 class PackMcmetaMergeStrategyTest {
@@ -251,5 +254,102 @@ class PackMcmetaMergeStrategyTest {
         JsonArray block = merged.getAsJsonObject("filter").getAsJsonArray("block");
         assertEquals(2, entries.size());
         assertEquals(2, block.size());
+    }
+
+    // --- format range repair and overlay formats completion (G9) ------------
+
+    @Test
+    void formatRange_unionAcrossLegacyAndNewSchema() {
+        List<String> notes = new ArrayList<>();
+        MergeContext ctx = new MergeContext("pack.mcmeta", "new-pack", "old-pack", null, notes::add);
+        JsonObject high = JsonMerger.parseJson("""
+                { "pack": { "description": "new", "min_format": [84, 0], "max_format": 88 } }""");
+        JsonObject low = JsonMerger.parseJson("""
+                { "pack": { "description": "old", "pack_format": 46, "supported_formats": [34, 46] } }""");
+
+        JsonObject pack = strategy.merge(high, low, ctx).getAsJsonObject("pack");
+        assertEquals("[34,64]", pack.get("supported_formats").toString(), "legacy clients see the union, capped at 64");
+        assertEquals(34, pack.get("min_format").getAsInt());
+        assertEquals(88, pack.get("max_format").getAsInt());
+        int packFormat = pack.get("pack_format").getAsInt();
+        assertTrue(packFormat >= 34 && packFormat <= 64, "pack_format must sit inside supported_formats: " + packFormat);
+        assertEquals("new", pack.get("description").getAsString());
+        assertEquals(1, notes.size(), notes.toString());
+        assertTrue(notes.get(0).contains("34..88"), notes.get(0));
+    }
+
+    @Test
+    void formatRange_newSchemaOnly_keepsMinorVersionArrays() {
+        JsonObject high = JsonMerger.parseJson("""
+                { "pack": { "min_format": [84, 0], "max_format": [84, 0] } }""");
+        JsonObject low = JsonMerger.parseJson("""
+                { "pack": { "min_format": 69, "max_format": 75 } }""");
+
+        JsonObject pack = strategy.merge(high, low, CTX).getAsJsonObject("pack");
+        assertEquals("69", pack.get("min_format").toString());
+        assertEquals("[84,0]", pack.get("max_format").toString());
+        assertFalse(pack.has("supported_formats"));
+        assertFalse(pack.has("pack_format"));
+    }
+
+    @Test
+    void formatRange_legacyRanges_widenAndClampPackFormat() {
+        JsonObject high = JsonMerger.parseJson("""
+                { "pack": { "pack_format": 15, "supported_formats": { "min_inclusive": 15, "max_inclusive": 22 } } }""");
+        JsonObject low = JsonMerger.parseJson("""
+                { "pack": { "pack_format": 46, "supported_formats": [34, 46] } }""");
+
+        JsonObject pack = strategy.merge(high, low, CTX).getAsJsonObject("pack");
+        assertEquals("[15,46]", pack.get("supported_formats").toString());
+        assertEquals(15, pack.get("pack_format").getAsInt());
+        assertFalse(pack.has("min_format"));
+    }
+
+    @Test
+    void formatRange_packFormatOnly_keepsHighPriorityValue() {
+        JsonObject high = JsonMerger.parseJson("{ \"pack\": { \"pack_format\": 46 } }");
+        JsonObject low = JsonMerger.parseJson("{ \"pack\": { \"pack_format\": 34 } }");
+        JsonObject pack = strategy.merge(high, low, CTX).getAsJsonObject("pack");
+        assertEquals(46, pack.get("pack_format").getAsInt());
+        assertFalse(pack.has("supported_formats"));
+    }
+
+    @Test
+    void overlayFormats_completedWhenCombinedListReachesLegacyClients() {
+        List<String> notes = new ArrayList<>();
+        MergeContext ctx = new MergeContext("pack.mcmeta", "a", "b", null, notes::add);
+        JsonObject high = JsonMerger.parseJson("""
+                { "pack": { "min_format": 84, "max_format": 84 },
+                  "overlays": { "entries": [ { "directory": "pm_new", "min_format": 84, "max_format": [88, 0] } ] } }""");
+        JsonObject low = JsonMerger.parseJson("""
+                { "pack": { "min_format": 46, "max_format": 84 },
+                  "overlays": { "entries": [
+                    { "directory": "pm_old", "formats": [46, 64], "min_format": 46, "max_format": 64 },
+                    { "directory": "pm_mid", "min_format": 60, "max_format": 70 }
+                  ] } }""");
+
+        JsonArray entries = strategy.merge(high, low, ctx).getAsJsonObject("overlays").getAsJsonArray("entries");
+        assertEquals(3, entries.size());
+        JsonObject pmNew = entries.get(0).getAsJsonObject();
+        assertEquals(84, pmNew.getAsJsonObject("formats").get("min_inclusive").getAsInt());
+        assertEquals(88, pmNew.getAsJsonObject("formats").get("max_inclusive").getAsInt());
+        assertEquals("[46,64]", entries.get(1).getAsJsonObject().get("formats").toString(), "existing formats untouched");
+        JsonObject pmMid = entries.get(2).getAsJsonObject();
+        assertEquals(60, pmMid.getAsJsonObject("formats").get("min_inclusive").getAsInt());
+        assertEquals(64, pmMid.getAsJsonObject("formats").get("max_inclusive").getAsInt(), "capped at 64");
+        assertTrue(notes.stream().anyMatch(n -> n.contains("2 overlay entries")), notes.toString());
+    }
+
+    @Test
+    void overlayFormats_notRequiredWhenAllEntriesAreNewFormat() {
+        JsonObject high = JsonMerger.parseJson("""
+                { "pack": { "min_format": 84, "max_format": 84 },
+                  "overlays": { "entries": [ { "directory": "a", "min_format": 84, "max_format": 84 } ] } }""");
+        JsonObject low = JsonMerger.parseJson("""
+                { "pack": { "min_format": 84, "max_format": 84 },
+                  "overlays": { "entries": [ { "directory": "b", "min_format": 70, "max_format": 84 } ] } }""");
+
+        JsonArray entries = strategy.merge(high, low, CTX).getAsJsonObject("overlays").getAsJsonArray("entries");
+        for (var e : entries) assertFalse(e.getAsJsonObject().has("formats"), e.toString());
     }
 }

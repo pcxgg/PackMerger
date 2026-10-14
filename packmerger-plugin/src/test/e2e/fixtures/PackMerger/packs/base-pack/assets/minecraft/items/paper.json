@@ -1,0 +1,12 @@
+{
+  "model": {
+    "type": "minecraft:range_dispatch",
+    "property": "minecraft:custom_model_data",
+    "entries": [
+      { "threshold": 1, "model": { "type": "minecraft:model", "model": "pmtest:item/base_coin" } },
+      { "threshold": 1000, "model": { "type": "minecraft:model", "model": "pmtest:item/base_knife" } },
+      { "threshold": 2000, "model": { "type": "minecraft:model", "model": "pmtest:item/base_gun" } }
+    ],
+    "fallback": { "type": "minecraft:model", "model": "minecraft:item/paper" }
+  }
+}

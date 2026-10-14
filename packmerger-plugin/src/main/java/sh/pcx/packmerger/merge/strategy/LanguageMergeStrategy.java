@@ -21,7 +21,7 @@ public class LanguageMergeStrategy implements MergeStrategy {
 
     @Override
     public boolean matches(String path) {
-        return path.toLowerCase().matches("assets/[^/]+/lang/.+\\.json");
+        return path.toLowerCase().matches(OVERLAY_PREFIX + "assets/[^/]+/lang/.+\\.json");
     }
 
     @Override

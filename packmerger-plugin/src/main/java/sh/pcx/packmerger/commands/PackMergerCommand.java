@@ -73,6 +73,7 @@ public class PackMergerCommand {
      * <pre>
      * /packmerger (requires packmerger.admin)
      *   ├── reload    — reload config and re-merge
+     *   ├── merge     — re-stage plugin packs, merge and upload (no config reload)
      *   ├── validate  — validate current merged pack
      *   ├── status    — show plugin status
      *   └── apply     — force-send pack
@@ -88,6 +89,8 @@ public class PackMergerCommand {
                             .requires(source -> source.getSender().hasPermission("packmerger.admin"))
                             .then(Commands.literal("reload")
                                     .executes(this::handleReload))
+                            .then(Commands.literal("merge")
+                                    .executes(this::handleMerge))
                             .then(Commands.literal("validate")
                                     .executes(this::handleValidate))
                             .then(Commands.literal("status")
@@ -156,6 +159,19 @@ public class PackMergerCommand {
         plugin.reload();
         plugin.mergeAndUpload(sender);
 
+        return 1;
+    }
+
+    /**
+     * Handles {@code /packmerger merge} — runs the merge + upload pipeline without
+     * reloading the config. Plugin packs are re-staged as part of the merge, so
+     * this picks up a plugin's freshly rebuilt pack.
+     *
+     * @param ctx the Brigadier command context
+     * @return 1 (success)
+     */
+    private int handleMerge(CommandContext<CommandSourceStack> ctx) {
+        plugin.mergeAndUpload(ctx.getSource().getSender());
         return 1;
     }
 
@@ -258,6 +274,12 @@ public class PackMergerCommand {
             }
             sender.sendMessage(msg.getMessage("status.packs-in-folder",
                     "count", String.valueOf(count)));
+        }
+
+        if (plugin.getPluginPackManager() != null && plugin.getConfigManager().isPluginPacksEnabled()) {
+            List<String> merged = plugin.getPluginPackManager().getMergedAliases();
+            sender.sendMessage(msg.getMessage("status.plugin-packs",
+                    "packs", merged.isEmpty() ? "none" : String.join(", ", merged)));
         }
 
         return 1;
