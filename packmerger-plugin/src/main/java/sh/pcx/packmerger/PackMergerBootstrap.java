@@ -21,12 +21,11 @@ import sh.pcx.packmerger.commands.PackMergerCommand;
 import sh.pcx.packmerger.bedrock.BedrockConversionResult;
 import sh.pcx.packmerger.bedrock.BedrockConverter;
 import sh.pcx.packmerger.bedrock.BedrockConverterOptions;
-import sh.pcx.packmerger.common.PackInfo;
-import sh.pcx.packmerger.common.PackMessaging;
 import sh.pcx.packmerger.config.ConfigManager;
 import sh.pcx.packmerger.config.MessageManager;
 import sh.pcx.packmerger.distribution.PackDistributor;
 import sh.pcx.packmerger.distribution.PackIdentity;
+import sh.pcx.packmerger.distribution.ProxyLink;
 import sh.pcx.packmerger.distribution.PublishedPack;
 import sh.pcx.packmerger.discovery.ApiPackManager;
 import sh.pcx.packmerger.integration.CompetingHostManager;
@@ -128,6 +127,9 @@ public class PackMergerBootstrap implements PackMergerApi {
 
     /** Handles sending the resource pack to individual players or all online players. */
     private PackDistributor distributor;
+
+    /** Link to the PackMerger proxy plugin (relay + Bungee offers). */
+    private volatile ProxyLink proxyLink;
 
     /** Fetches remote pack sources into {@code packs/.remote-cache/}. */
     private RemotePackManager remotePackManager;
@@ -284,9 +286,10 @@ public class PackMergerBootstrap implements PackMergerApi {
         // Publish the API for other plugins (PackMergerApi.get()).
         Bukkit.getServicesManager().register(PackMergerApi.class, this, loader, ServicePriority.Normal);
 
-        // Outgoing channel used to relay the current pack URL/hash to a Velocity/
-        // Bungee proxy for network-wide distribution (see distribution.proxy-notify).
-        Bukkit.getMessenger().registerOutgoingPluginChannel(loader, PackMessaging.CHANNEL);
+        // Link to the PackMerger proxy plugin (Velocity/BungeeCord): relays published packs
+        // (distribution.proxy-notify) and honours signed pack offers from a Bungee proxy.
+        proxyLink = new ProxyLink(this);
+        proxyLink.register();
 
         // bStats metrics (https://bstats.org/plugin/bukkit/PackMerger/32086).
         // Guarded so a scheduler incompatibility (e.g. on Folia) can't fail enable.
@@ -745,10 +748,9 @@ public class PackMergerBootstrap implements PackMergerApi {
             boolean isNewPack = !record.sameContentAs(previous);
             logger.upload((republish ? "Pack re-published: " : "Pack uploaded successfully: ") + url);
             Bukkit.getPluginManager().callEvent(new PackUploadedEvent(url, hash));
-            if (previous == null || isNewPack || !previous.url().equals(url)) {
-                // Relay the new URL/hash to a proxy for network-wide distribution.
-                broadcastPackToProxy(url, hashHex);
-            }
+            // Relay to the proxy (distribution.proxy-notify); ProxyLink only sends a pack
+            // the proxy hasn't had yet, and waits for a player if nobody is online.
+            if (proxyLink != null) proxyLink.onPublished(record);
             // PackDistributor self-schedules on each player's region: safe off-thread.
             distributor.onPublished(isNewPack);
             return record;
@@ -841,6 +843,7 @@ public class PackMergerBootstrap implements PackMergerApi {
         messageManager.load();
         logger.setLevel(configManager.getLogLevel());
         if (distributor != null) distributor.reloadSettings();
+        if (proxyLink != null) proxyLink.reloadSettings();
         initUploadProvider();
         // Re-publish the existing output through the (re)initialised provider before the
         // re-merge, so the advertised URL keeps serving the current pack meanwhile.
@@ -1100,30 +1103,6 @@ public class PackMergerBootstrap implements PackMergerApi {
     }
 
     /**
-     * Relays the current pack URL/hash to a Velocity/Bungee proxy (over the
-     * {@link PackMessaging#CHANNEL} plugin channel, via a connected player) so the
-     * proxy can offer it network-wide. Best-effort and gated by
-     * {@code distribution.proxy-notify}; if no player is online the proxy keeps
-     * using its configured URL until one joins.
-     */
-    private void broadcastPackToProxy(String url, String hashHex) {
-        if (!configManager.isProxyNotify() || url == null || url.isEmpty()) return;
-        byte[] payload = PackMessaging.encode(new PackInfo(url, hashHex));
-        // Plugin messaging must run on a server-owned thread (Folia-safe via the
-        // global region scheduler) and travel through a connected player.
-        Bukkit.getGlobalRegionScheduler().run(loader, task -> {
-            var players = Bukkit.getOnlinePlayers();
-            if (players.isEmpty()) {
-                logger.debug("[proxy] no players online to relay the pack update; "
-                        + "the proxy keeps its configured URL until one joins");
-                return;
-            }
-            players.iterator().next().sendPluginMessage(loader, PackMessaging.CHANNEL, payload);
-            logger.debug("[proxy] relayed pack update to the proxy");
-        });
-    }
-
-    /**
      * Computes the SHA-1 hash of a file using buffered reads.
      *
      * <p>Minecraft's resource pack protocol requires the SHA-1 hash to verify pack integrity.
@@ -1260,6 +1239,9 @@ public class PackMergerBootstrap implements PackMergerApi {
 
     /** @return the distributor that sends packs to players */
     public PackDistributor getDistributor() { return distributor; }
+
+    /** @return the link to the PackMerger proxy plugin, or {@code null} before enable */
+    public ProxyLink getProxyLink() { return proxyLink; }
 
     /** @return the active upload provider */
     public UploadProvider getUploadProvider() { return uploadProvider; }

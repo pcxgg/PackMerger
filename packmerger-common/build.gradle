@@ -26,4 +26,6 @@ tasks.named('test') {
 
 tasks.withType(JavaCompile).configureEach {
     options.encoding = 'UTF-8'
+    // Shaded into the proxy jars too: BungeeCord networks often still run Java 17.
+    options.release = 17
 }

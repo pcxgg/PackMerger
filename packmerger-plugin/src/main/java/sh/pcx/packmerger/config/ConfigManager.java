@@ -38,7 +38,7 @@ public class ConfigManager {
      * so {@link #load()} can surface a one-line notice on older configs (we never
      * rewrite the file, since it carries operator comments).
      */
-    private static final int CURRENT_CONFIG_VERSION = 5;
+    private static final int CURRENT_CONFIG_VERSION = 6;
 
     /** Default kick message for {@code distribution.enforce-required}. */
     static final String DEFAULT_KICK_MESSAGE =
@@ -265,6 +265,9 @@ public class ConfigManager {
     /** Whether to push the pack URL/hash to a Velocity/Bungee proxy for network-wide distribution. */
     private boolean proxyNotify;
 
+    /** Shared secret for signing/verifying proxy messages (resolved, {@code null} = none). */
+    private String proxySecret;
+
     // -------------------------------------------------------------------------
     // Validation
     // -------------------------------------------------------------------------
@@ -481,6 +484,12 @@ public class ConfigManager {
         notifyMessage = config.getString("distribution.on-new-pack.notify-message",
                 "<yellow>[PackMerger]</yellow> <gray>A new resource pack is available. Rejoin or use F3+T to reload.</gray>");
         proxyNotify = config.getBoolean("distribution.proxy-notify", false);
+        String rawProxySecret = config.getString("distribution.proxy-secret", "");
+        for (String var : sh.pcx.packmerger.common.Secrets.missingVariables(rawProxySecret, System::getenv)) {
+            plugin.getLogger().log(Level.WARNING, "distribution.proxy-secret refers to environment variable "
+                    + var + ", which is not set");
+        }
+        proxySecret = sh.pcx.packmerger.common.Secrets.resolve(rawProxySecret);
 
         // Remote packs — optional
         remotePacks.clear();
@@ -824,6 +833,13 @@ public class ConfigManager {
 
     /** @return {@code true} if the pack URL/hash should be pushed to a proxy for network-wide distribution */
     public boolean isProxyNotify() { return proxyNotify; }
+
+    /**
+     * @return the shared proxy secret with {@code ${ENV}} placeholders resolved, or
+     *         {@code null} when none is set (messages to the proxy are then unsigned and
+     *         pack offers from a BungeeCord proxy are refused)
+     */
+    public String getProxySecret() { return proxySecret; }
 
     // -------------------------------------------------------------------------
     // Getters — Validation

@@ -23,6 +23,29 @@ dependencies {
     implementation project(':packmerger-common')   // shaded into the proxy jar
 }
 
+// @Plugin(version = ...) needs a compile-time constant: generate it from the project
+// version so the proxy plugin never reports a stale hard-coded version again.
+def generatedConstantsDir = layout.buildDirectory.dir('generated/sources/build-constants')
+def generateBuildConstants = tasks.register('generateBuildConstants') {
+    def projectVersion = project.version.toString()
+    inputs.property('version', projectVersion)
+    outputs.dir(generatedConstantsDir)
+    doLast {
+        def target = generatedConstantsDir.get().file('sh/pcx/packmerger/proxy/BuildConstants.java').asFile
+        target.parentFile.mkdirs()
+        target.text = """package sh.pcx.packmerger.proxy;
+
+/** Generated at build time from the Gradle project version; do not edit. */
+final class BuildConstants {
+    private BuildConstants() {}
+
+    static final String VERSION = "${projectVersion}";
+}
+"""
+    }
+}
+sourceSets.main.java.srcDir(generateBuildConstants.map { generatedConstantsDir })
+
 tasks.named('shadowJar') {
     archiveClassifier.set('')
 }
@@ -33,4 +56,6 @@ tasks.named('build') {
 
 tasks.withType(JavaCompile).configureEach {
     options.encoding = 'UTF-8'
+    // Velocity 3.4 runs on Java 21; a Java 25 class file would not load there.
+    options.release = 21
 }

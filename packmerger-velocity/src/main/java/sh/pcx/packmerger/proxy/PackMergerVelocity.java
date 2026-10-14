@@ -2,8 +2,10 @@ package sh.pcx.packmerger.proxy;
 
 import com.google.inject.Inject;
 import com.velocitypowered.api.event.Subscribe;
+import com.velocitypowered.api.event.connection.DisconnectEvent;
 import com.velocitypowered.api.event.connection.PluginMessageEvent;
 import com.velocitypowered.api.event.connection.PostLoginEvent;
+import com.velocitypowered.api.event.player.ServerPostConnectEvent;
 import com.velocitypowered.api.event.proxy.ProxyInitializeEvent;
 import com.velocitypowered.api.plugin.Plugin;
 import com.velocitypowered.api.plugin.annotation.DataDirectory;
@@ -14,30 +16,29 @@ import com.velocitypowered.api.proxy.messages.MinecraftChannelIdentifier;
 import com.velocitypowered.api.proxy.player.ResourcePackInfo;
 import net.kyori.adventure.text.Component;
 import org.slf4j.Logger;
+import sh.pcx.packmerger.common.Hex;
 import sh.pcx.packmerger.common.PackInfo;
 import sh.pcx.packmerger.common.PackMessaging;
+import sh.pcx.packmerger.common.proxy.ProxyCoordinator;
+import sh.pcx.packmerger.common.proxy.ProxySettings;
 
-import java.io.IOException;
-import java.io.InputStream;
-import java.io.OutputStream;
-import java.nio.file.Files;
 import java.nio.file.Path;
-import java.util.Properties;
 
 /**
- * Velocity proxy companion to PackMerger. Offers the merged resource pack to every
- * player as they join the proxy, so distribution is network-wide rather than
- * per-backend.
+ * Velocity proxy companion to PackMerger. Offers the merged resource pack from the proxy,
+ * network-wide (one pack) or per backend ({@code mode=per-server}).
  *
- * <p>The pack URL is set in this plugin's {@code config.properties}; backends may
- * also push live URL/hash updates over the {@link PackMessaging#CHANNEL} plugin
- * channel (so content-addressed URLs stay current). The proxy reuses whatever
- * hosting the backend already uses — it only needs the URL (and ideally the SHA-1).</p>
+ * <p>The pack comes from {@code config.properties} or from backends that push it over the
+ * {@link PackMessaging#CHANNEL} channel ({@code distribution.proxy-notify}). Pushed packs
+ * are remembered in {@code state.properties} across restarts, messages are authenticated
+ * with a shared secret, updates are re-offered to online players in place, and each player
+ * is offered a given pack once per session. The logic lives in {@link ProxyCoordinator},
+ * shared with the BungeeCord plugin.</p>
  */
 @Plugin(
         id = "packmerger",
         name = "PackMerger",
-        version = "1.2.0",
+        version = BuildConstants.VERSION,
         description = "Network-wide resource pack distribution for PackMerger",
         authors = {"PCX Network"}
 )
@@ -49,9 +50,7 @@ public final class PackMergerVelocity {
 
     private final MinecraftChannelIdentifier channel = MinecraftChannelIdentifier.from(PackMessaging.CHANNEL);
 
-    private volatile PackInfo current = new PackInfo(null, null);
-    private volatile boolean required;
-    private volatile String prompt = "";
+    private volatile ProxyCoordinator coordinator;
 
     @Inject
     public PackMergerVelocity(ProxyServer proxy, Logger logger, @DataDirectory Path dataDir) {
@@ -63,99 +62,85 @@ public final class PackMergerVelocity {
     @Subscribe
     public void onInit(ProxyInitializeEvent event) {
         proxy.getChannelRegistrar().register(channel);
-        loadConfig();
-        if (current.hasUrl()) {
-            logger.info("PackMerger proxy ready — offering pack from {}", current.url());
+        ProxySettings settings = ProxySettings.load(dataDir, w -> logger.warn("PackMerger proxy: {}", w));
+        ProxyCoordinator c = new ProxyCoordinator(settings, dataDir, new ProxyCoordinator.Log() {
+            @Override public void info(String message) { logger.info("PackMerger proxy: {}", message); }
+            @Override public void warn(String message) { logger.warn("PackMerger proxy: {}", message); }
+        });
+        c.start();
+        this.coordinator = c;
+
+        PackInfo pack = c.networkPack();
+        if (settings.mode() == ProxySettings.Mode.PER_SERVER) {
+            logger.info("PackMerger proxy {} ready (per-server mode): offering each backend's own pack on connect",
+                    BuildConstants.VERSION);
+        } else if (pack != null) {
+            logger.info("PackMerger proxy {} ready: offering {} (from {})", BuildConstants.VERSION,
+                    pack.url(), c.networkSource());
         } else {
-            logger.warn("PackMerger proxy: no pack URL configured. Set 'url' in "
-                    + "plugins/packmerger/config.properties or have a backend push one.");
+            logger.warn("PackMerger proxy {}: no pack yet. Set 'url' in plugins/packmerger/config.properties "
+                    + "or enable distribution.proxy-notify on a backend.", BuildConstants.VERSION);
         }
     }
 
     @Subscribe
     public void onPostLogin(PostLoginEvent event) {
-        sendPack(event.getPlayer());
+        ProxyCoordinator c = coordinator;
+        if (c == null) return;
+        Player player = event.getPlayer();
+        offer(player, c.nextOffer(player.getUniqueId(), null));
     }
 
-    /** Receives live pack updates from a backend PackMerger over the plugin channel. */
+    @Subscribe
+    public void onServerConnected(ServerPostConnectEvent event) {
+        ProxyCoordinator c = coordinator;
+        if (c == null) return;
+        Player player = event.getPlayer();
+        String server = player.getCurrentServer().map(s -> s.getServerInfo().getName()).orElse(null);
+        offer(player, c.nextOffer(player.getUniqueId(), server));
+    }
+
+    @Subscribe
+    public void onDisconnect(DisconnectEvent event) {
+        ProxyCoordinator c = coordinator;
+        if (c != null) c.forget(event.getPlayer().getUniqueId());
+    }
+
+    /** Receives pack announcements from backends over the plugin channel. */
     @Subscribe
     public void onPluginMessage(PluginMessageEvent event) {
         if (!channel.getId().equals(event.getIdentifier().getId())) return;
-        // Only trust messages coming from a backend server, never from a client.
-        if (!(event.getSource() instanceof ServerConnection)) {
-            event.setResult(PluginMessageEvent.ForwardResult.handled());
-            return;
-        }
+        // Never forward our channel: not to clients (backend announcements), and not to
+        // backends (a client must not be able to pose as the proxy).
         event.setResult(PluginMessageEvent.ForwardResult.handled());
-        try {
-            PackInfo info = PackMessaging.decode(event.getData());
-            if (info.hasUrl()) {
-                current = info;
-                logger.info("PackMerger proxy: pack updated from backend → {}", info.url());
+        if (!(event.getSource() instanceof ServerConnection connection)) return;
+        ProxyCoordinator c = coordinator;
+        if (c == null) return;
+
+        ProxyCoordinator.Result result = c.onBackendMessage(connection.getServerInfo().getName(), event.getData());
+        if (!result.accepted()) return; // the coordinator logged why
+        if (result.changed()) {
+            logger.info("PackMerger proxy: {}", result.detail());
+            if (c.settings().resendOnUpdate()) {
+                for (Player player : proxy.getAllPlayers()) {
+                    String server = player.getCurrentServer().map(s -> s.getServerInfo().getName()).orElse(null);
+                    offer(player, c.nextOffer(player.getUniqueId(), server));
+                }
             }
-        } catch (RuntimeException e) {
-            logger.warn("PackMerger proxy: ignored malformed pack message ({})", e.getMessage());
         }
     }
 
-    private void sendPack(Player player) {
-        PackInfo info = current;
-        if (!info.hasUrl()) return;
+    private void offer(Player player, PackInfo info) {
+        if (info == null || !info.hasUrl()) return;
+        ProxySettings settings = coordinator.settings();
         ResourcePackInfo.Builder builder = proxy.createResourcePackBuilder(info.url())
-                .setShouldForce(required);
-        if (info.hasHash()) {
-            byte[] hash = hexToBytes(info.sha1Hex());
-            if (hash != null) builder.setHash(hash);
-        }
-        if (prompt != null && !prompt.isBlank()) {
-            builder.setPrompt(Component.text(prompt));
+                .setId(ProxyCoordinator.PACK_ID)
+                .setShouldForce(settings.required());
+        byte[] hash = Hex.decodeOrNull(info.sha1Hex());
+        if (hash != null && hash.length == 20) builder.setHash(hash); // a SHA-1 is 20 bytes
+        if (settings.prompt() != null && !settings.prompt().isBlank()) {
+            builder.setPrompt(Component.text(settings.prompt()));
         }
         player.sendResourcePackOffer(builder.build());
-    }
-
-    // --- config ---
-
-    private void loadConfig() {
-        Properties props = new Properties();
-        try {
-            Path file = dataDir.resolve("config.properties");
-            if (Files.notExists(file)) {
-                Files.createDirectories(dataDir);
-                props.setProperty("url", "");
-                props.setProperty("sha1", "");
-                props.setProperty("required", "false");
-                props.setProperty("prompt", "");
-                try (OutputStream out = Files.newOutputStream(file)) {
-                    props.store(out, "PackMerger Velocity — set 'url' to your merged pack's download URL. "
-                            + "A backend PackMerger can also push live updates.");
-                }
-            } else {
-                try (InputStream in = Files.newInputStream(file)) {
-                    props.load(in);
-                }
-            }
-        } catch (IOException e) {
-            logger.warn("PackMerger proxy: could not read config.properties ({})", e.getMessage());
-        }
-        String url = props.getProperty("url", "").trim();
-        String sha1 = props.getProperty("sha1", "").trim();
-        this.current = new PackInfo(url.isEmpty() ? null : url, sha1.isEmpty() ? null : sha1);
-        this.required = Boolean.parseBoolean(props.getProperty("required", "false"));
-        this.prompt = props.getProperty("prompt", "");
-    }
-
-    private static byte[] hexToBytes(String hex) {
-        if (hex == null) return null;
-        int len = hex.length();
-        if (len % 2 != 0) return null;
-        byte[] out = new byte[len / 2];
-        try {
-            for (int i = 0; i < len; i += 2) {
-                out[i / 2] = (byte) Integer.parseInt(hex.substring(i, i + 2), 16);
-            }
-        } catch (NumberFormatException e) {
-            return null;
-        }
-        return out;
     }
 }

@@ -314,6 +314,9 @@ public class PackMergerCommand {
         sendApiPackStatus(sender, msg);
         sendCompetingHostStatus(sender, msg);
         sendBedrockStatus(sender, msg);
+        if (plugin.getProxyLink() != null) {
+            sender.sendMessage(msg.getMessage("status.proxy", "state", plugin.getProxyLink().describe()));
+        }
         boolean verbose = "debug".equalsIgnoreCase(plugin.getConfigManager().getLogLevel());
         sender.sendMessage(msg.getMessage("status.logging",
                 "level", plugin.getConfigManager().getLogLevel(), "verbose", verbose ? "on" : "off"));

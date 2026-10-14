@@ -42,6 +42,7 @@ status.host-conflict: "<red>Other pack host: {plugin} {key}: {value}</red> <gray
 status.host-conflict-dismissed: "<gray>Other pack host: {plugin} {key}: {value} (dismissed; /pm fixup {id})</gray>"
 status.bedrock-off: "<gray>Bedrock: <white>conversion off; Floodgate {floodgate}; Java pack {java}</white></gray>"
 status.bedrock-on: "<gray>Bedrock: <white>last conversion {last}; Geyser folder: {geyser}; Floodgate {floodgate}; Java pack {java}</white></gray>"
+status.proxy: "<gray>Proxy link: <white>{state}</white></gray>"
 status.logging: "<gray>Logging: <white>{level}</white> (verbose {verbose}; /pm verbose on|off)</gray>"
 
 # Verbose

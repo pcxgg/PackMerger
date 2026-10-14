@@ -139,6 +139,35 @@ public class PackDistributor {
         }
     }
 
+    /**
+     * Sends the pack a BungeeCord proxy asked this server to deliver (a verified OFFER,
+     * see {@link ProxyLink}). It goes out under the proxy's pack id, so it replaces the
+     * proxy's previous pack in place and never touches this server's own pack. Sent
+     * regardless of {@code distribution.enabled}; Bedrock players are still skipped.
+     */
+    public void sendProxyOffer(Player player, sh.pcx.packmerger.common.PackMessage offer) {
+        if (plugin.getConfigManager().isSkipBedrockPlayers() && bedrockPlayers.isBedrock(player)) {
+            logger.debug("Skipping the proxy's Java resource pack for Bedrock player " + player.getName());
+            return;
+        }
+        player.getScheduler().run(plugin.getLoader(), scheduled -> {
+            try {
+                ResourcePackInfo.Builder info = ResourcePackInfo.resourcePackInfo()
+                        .uri(URI.create(offer.pack().url()))
+                        .id(offer.packId());
+                if (offer.pack().hasHash()) info.hash(offer.pack().sha1Hex());
+                ResourcePackRequest.Builder request = ResourcePackRequest.resourcePackRequest()
+                        .packs(info.build())
+                        .replace(false)
+                        .required(offer.required());
+                if (!offer.prompt().isBlank()) request.prompt(Component.text(offer.prompt()));
+                player.sendResourcePacks(request.build());
+            } catch (Exception e) {
+                logger.warning("Failed to send the proxy's resource pack to " + player.getName() + ": " + e.getMessage());
+            }
+        }, null);
+    }
+
     /** Sends the published pack to every online player. */
     public void sendToAll(boolean forced) {
         for (Player player : Bukkit.getOnlinePlayers()) {

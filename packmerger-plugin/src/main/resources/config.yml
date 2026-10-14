@@ -11,7 +11,7 @@
 # startup if this is older than the plugin expects, so you know to review the
 # latest config.yml for newly added options. Missing keys always fall back to
 # safe defaults, so upgrades never break — this is purely informational.
-config-version: 5
+config-version: 6
 
 # =============================================================================
 # Server Identity
@@ -688,12 +688,33 @@ distribution:
     # Default: (see below)
     notify-message: "<yellow>[PackMerger]</yellow> <gray>A new resource pack is available. Rejoin or use F3+T to reload.</gray>"
 
-  # Push the merged pack's URL + SHA-1 to a Velocity/Bungee proxy so the pack is
-  # offered network-wide from the proxy (instead of each backend sending its own).
-  # Requires the PackMerger proxy plugin (packmerger-velocity) installed on the
-  # proxy. The proxy can also be given the URL directly in its own config.
-  # Off by default.
+  # ---- Proxy (Velocity / BungeeCord) ----
+  # Push the merged pack's URL + SHA-1 to the PackMerger proxy plugin
+  # (packmerger-velocity or packmerger-bungee) so the pack is offered network-wide
+  # from the proxy. The proxy remembers the last pushed pack across restarts. If
+  # nobody is online when a new pack is published, it is pushed through the next
+  # player who joins (plugin messages need a connected player).
+  #
+  # When the proxy distributes the pack, set distribution.enabled: false on the
+  # backends, or players get it twice (PackMerger warns about this on startup).
+  # See the README section "Proxy (Velocity / BungeeCord)".
+  #
+  # Valid values: true, false
+  # Default: false
   proxy-notify: false
+
+  # Shared secret that authenticates the messages between this server and the
+  # PackMerger proxy plugin (HMAC-SHA256). Use the same value as 'secret' in the
+  # proxy plugin's config.properties, on the proxy and on every backend.
+  #   - With a secret, the proxy rejects unsigned or forged pack updates, so a
+  #     backend without the secret can't replace the network pack.
+  #   - BungeeCord needs it: Bungee has no resource-pack API, so the proxy asks the
+  #     backend to send the pack, and this server only honours signed requests.
+  # ${NAME} reads an environment variable, e.g. proxy-secret: "${PACKMERGER_SECRET}".
+  # Use a long random string; don't reuse the Velocity forwarding secret.
+  #
+  # Default: "" (messages are not signed; requests from a Bungee proxy are refused)
+  proxy-secret: ""
 
 # =============================================================================
 # Bedrock / Geyser (optional)
