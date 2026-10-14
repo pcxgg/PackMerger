@@ -3,7 +3,7 @@
 # the internet (update check, remote packs, plugin-pack discovery) is off.
 # plugin-packs.spec.ts flips the "# e2e:" marked lines to exercise discovery
 # against the fake plugin output in plugins/PmE2EFake/.
-config-version: 5
+config-version: 6
 server-name: "e2e"
 priority:
   - "overlay-pack"
@@ -78,7 +78,9 @@ distribution:
   on-new-pack:
     action: "notify"
     notify-message: "<yellow>[PackMerger]</yellow> <gray>A new resource pack is available. Rejoin or use F3+T to reload.</gray>"
+  # proxy.spec.ts switches these on (and restores them) to exercise the proxy link.
   proxy-notify: false
+  proxy-secret: ""
 bedrock:
   enabled: false
 validation:
