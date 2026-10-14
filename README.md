@@ -139,7 +139,10 @@ merge:
 upload:
   auto-upload: true              # Upload after every merge
   provider: "self-host"          # "self-host", "s3" or "polymath"
+  fallback: []                   # e.g. ["s3"]: used when the provider above can't be used
 ```
+
+`upload.fallback` lists providers to publish through, in order, when `upload.provider` fails to upload, or (self-host) when its reachability check fails or its auto-detected host is not routable. Only configured providers are tried. The route in use, and the reason for any fallback, is shown in `/pm status`, logged, and sent to online admins.
 
 #### Self-Host (Default)
 
@@ -147,12 +150,21 @@ upload:
 upload:
   provider: "self-host"
   self-host:
-    port: 8080
-    public-url: ""     # Auto-detects from server.properties; set explicitly if behind NAT/proxy
-    rate-limit: 50     # Max concurrent downloads (0 = unlimited)
+    port: -1                 # -1 = Minecraft port + 1; or a port your panel allocated
+    public-url: ""           # Complete URL, used as-is (only a bare http://host:port gets /pack)
+    public-host: ""          # Host name or public IP for the auto-built URL
+    detect-public-ip: false  # Opt-in: asks checkip.amazonaws.com / api.ipify.org for the public IP
+    verify: true             # Download-check the URL after every upload
+    rate-limit: 50           # Max concurrent downloads (0 = unlimited)
 ```
 
-The self-host provider starts a built-in HTTP server. Players download from `http://<your-ip>:<port>/pack`. Make sure the port is open in your firewall.
+The self-host provider starts a built-in HTTP server on all interfaces and serves the pack at `/pack`. Make sure the port is open in your firewall (on Pterodactyl/Pelican-style panels, add a port allocation for it).
+
+**The URL players are sent.** `public-url`, if set, is used exactly as written, so a reverse proxy or CDN URL such as `https://cdn.example.com/rp.zip` works (the proxy forwards to `http://<server>:<port>/pack`; requests arriving with the public URL's own path are served as well). Otherwise the URL is `http://<host>:<port>/pack`, with the host taken from the first routable of `public-host`, the opt-in public IP lookup, `server-ip` in `server.properties`, and the bind address. Loopback, private (RFC 1918), link-local, CGNAT, `0.0.0.0` and IPv6 unique-local hosts can't be reached from the internet: PackMerger still uses the best one it found (LAN players can download) but warns on every merge, tells admins on join, and `/pm status` says exactly what to set.
+
+**Verification.** After every upload, PackMerger downloads the first KiB of the pack from `127.0.0.1:<port>` and from the advertised URL and compares the bytes (the second request also catches routers without NAT hairpinning, closed ports and proxies pointing elsewhere). It runs off the main thread; the new pack is only served at `/pack` once it is published, so the check never exposes bytes that don't match the advertised SHA-1. A failure is logged, sent to online admins, shown in `/pm status`, and switches to `upload.fallback` when one is configured. For a `public-url` you set yourself, a failing advertised-URL check only warns (some NATs and CDNs can't be reached from inside). Set `verify: false` to skip it.
+
+**HTTP behaviour.** Exact path matching (`/packfoo` is a 404), `GET` and `HEAD`, a strong `ETag` (the SHA-1) with `If-None-Match` → `304`, single `Range` requests → `206`, `Cache-Control: no-cache` so CDNs revalidate, and the concurrent download limit (`429` when full). A download in progress keeps reading the file it started with, even if a new pack is published meanwhile.
 
 #### Polymath (Self-Hosted)
 
@@ -427,9 +439,16 @@ When enabled, a background thread watches the `packs/` folder for file system ev
 
 ### Self-host port already in use
 
-- Another process is using the configured port (default 8080)
-- Change `upload.self-host.port` to an unused port
-- Check with `netstat -tlnp | grep 8080` (Linux) or `netstat -an | findstr 8080` (Windows) to find the conflicting process
+- Another process is using the configured port (`-1` = Minecraft port + 1, e.g. 25566)
+- Change `upload.self-host.port` to an unused port; PackMerger warns when it equals the Minecraft port, `rcon.port` or `query.port`
+- Check with `netstat -tlnp | grep <port>` (Linux) or `netstat -an | findstr <port>` (Windows) to find the conflicting process
+- While the port can't be bound, uploads fail (players keep the previous pack) and `upload.fallback` is used if configured
+
+### Players can't download the self-hosted pack
+
+- Run `/pm status`: it shows the hosting route, the resolved host and where it came from, and the last verification result with its reason
+- `Not reachable from the internet`: set `upload.self-host.public-url` (full URL) or `public-host` (your domain or public IP), or enable `detect-public-ip`
+- `Verification: FAILED (advertised URL check failed ...)`: the port isn't forwarded/open, your router doesn't support NAT hairpinning, or a reverse proxy points elsewhere. Fix the network, or configure `upload.fallback: ["s3"]` with an S3/R2 bucket
 
 ### Pack validation warnings
 

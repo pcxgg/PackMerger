@@ -7,7 +7,8 @@ project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 ## [Unreleased]
 
 Delivery reliability: every player gets the pack, every time, and the pack that is
-advertised is always the pack that is served.
+advertised is always the pack that is served. Self-hosting works out of the box, and
+tells you exactly what to fix when it can't.
 
 ### Fixed
 - **Returning players got no pack.** The persistent player cache skipped the send on rejoin when the hash matched, but the client drops server packs on disconnect, so those players played without the pack (and `required` was never applied to them). The pack is now sent on every join; the client's own SHA-1 cache still avoids re-downloading an unchanged pack.
@@ -17,6 +18,11 @@ advertised is always the pack that is served.
 - **Players who joined before the first merge never got the pack** (with the default `on-new-pack: notify`). They are now sent it as soon as the first pack is published.
 - **Pack stacking and stripping other packs.** The pack UUID was derived from the hash, so add-mode stacked a new copy next to the stale one, and replace mode called `clearResourcePacks()`, removing packs sent by the proxy or other plugins. PackMerger now uses one stable UUID per server (`nameUUIDFromBytes("packmerger:" + server-name)`) and only ever removes its own pack.
 - **Status handling ignored the pack id.** A status report for another plugin's pack was treated as PackMerger's. Reports are now filtered by PackMerger's pack UUID.
+- **Self-host advertised `http://localhost:<port>/pack` on most servers**, silently. The URL host is now resolved from `public-url`, then the new `public-host`, then an opt-in public IP lookup, then `server-ip`, then the bind address, preferring the first publicly routable one. A loopback/private/link-local/CGNAT/`0.0.0.0`/ULA result is still used (LAN players can download) but logged as a warning on every merge, shown to admins on join and explained in `/pm status`.
+- **`public-url` could not point at an arbitrary path**: `/pack` was appended unless the URL already ended in `/pack`, so `https://cdn.example.com/rp.zip` became `.../rp.zip/pack`. `public-url` is now a complete URL; `/pack` is only appended when the URL has no path at all (`http://host:port` or `http://host:port/`). URLs ending in `/pack` behave as before.
+- **No check that the pack could actually be downloaded.** See "Reachability verification" below.
+- **Self-host HTTP handler**: `/pack` was a prefix match (`/packfoo` served the pack), `HEAD` returned 405, and there was no `ETag`, `If-None-Match` or `Range` support. Now: exact path matching, `GET`/`HEAD`, strong SHA-1 `ETag` with `304`, single-range `206`/`416`, `Cache-Control: no-cache`; the rate limiter is unchanged (HEAD and 304 don't take a download slot). A download streams from the file it opened, so publishing a new pack mid-download can't break it, and old snapshots that are still open (Windows) no longer make the upload fail.
+- The self-host request threads are shut down with the HTTP server (they leaked on every provider switch).
 - Config/README drift: `/pm merge` (use `/pm reload`), `debug: false` (the key is `log-level`), the provider list now includes `s3`, and the rollback comment no longer says "once enabled in 1.1.0".
 
 ### Added
@@ -24,8 +30,19 @@ advertised is always the pack that is served.
 - **`distribution.enforce-required`** (default off): with `required: true`, kick players who decline the pack, or whose download still fails after the retries, with a configurable MiniMessage `kick-message`.
 - **`distribution.skip-bedrock-players`** (default `true`): Floodgate (Bedrock) players are not sent the Java pack. Detected through the Floodgate API when Floodgate is installed.
 - `config-version` is now 3.
+- **Reachability verification** (`upload.self-host.verify`, default `true`): after every upload the first KiB of the pack is fetched from `127.0.0.1:<port>` and from the advertised URL and compared byte for byte (the latter catches closed ports, missing NAT hairpinning and misrouted proxies). It runs off the main thread, and the new pack is only served at `/pack` once it is published (the check uses a one-off `?pm-verify=` token), so the advertised SHA-1 always matches what `/pack` serves. Failures are logged, sent to online admins and shown in `/pm status`.
+- **`upload.fallback`** (default `[]`): providers to publish through, in order, when `upload.provider` fails to upload or (self-host) fails verification or has a non-routable auto host, e.g. `["s3"]`. If nothing better works, a self-host URL that failed its check is still used rather than sending no pack.
+- **`upload.self-host.public-host`**: host name or IP for the auto-built URL.
+- **`upload.self-host.detect-public-ip`** (default `false`) and `public-ip-services`: opt-in lookup of the server's public IP. This contacts a third party (by default Amazon checkip, then ipify), which learns the server's IP; it runs once per start/reload and only when `public-url` and `public-host` are empty.
+- **`/pm status`** shows the hosting route (and why a fallback was used), the self-host port and whether it is listening, the resolved host and where it came from (with the exact setting to change when it is not routable), and the last verification result with its reason and time.
+- Admins (`packmerger.admin`) get a notice a few seconds after joining when players probably can't download the pack.
+- Self-host warns when its port is out of range, equals the Minecraft port, or collides with `rcon.port`/`query.port` (when enabled).
+- `messages_en.yml` keys missing from an older copy on disk now fall back to the bundled text instead of showing the raw key.
+- `config-version` is now 4.
 
 ### Changed
+- **`upload.self-host.port` defaults to `-1` (Minecraft port + 1)** instead of `8080`. Configs that set a port explicitly (the generated config.yml always did, with `8080`) keep that port; only a config without the key moves to Minecraft port + 1. On hosting panels, allocate that port (or set an allocated one).
+- **`public-url` is used as a complete URL** (see Fixed). If you relied on `/pack` being appended to a URL with another path (e.g. `https://example.com/mc` meaning `https://example.com/mc/pack`), write the full URL.
 - **`distribution.cache` was removed.** Existing configs keep working; the section is ignored and a one-line notice suggests deleting it. `plugins/PackMerger/cache/player-cache.json` is no longer read or written and can be deleted.
 - **`use-add-resource-pack: false` no longer clears every server pack.** It removes PackMerger's own previous pack and sends the new one; packs from a proxy or other plugins stay applied. `true` sends without the explicit removal (the stable UUID makes the client replace PackMerger's pack in place).
 - **`distribution.required` only sets the client flag**, as before, but the config no longer claims that players are kicked; enable `enforce-required` for that.
