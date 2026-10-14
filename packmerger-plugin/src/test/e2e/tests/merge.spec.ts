@@ -40,11 +40,11 @@ test('overlapping packs are merged format-aware with the higher-priority pack wi
   // Non-JSON files: last write wins, i.e. the higher-priority pack.
   expect(entryText(pack, 'assets/pmtest/marker.txt').trim()).toBe('overlay');
 
-  // pack.mcmeta: the 26.1 min_format/max_format schema survives the merge.
+  // pack.mcmeta: the min_format/max_format schema (26.1 through 26.3: formats 84..97) survives the merge.
   const mcmeta = entryJson(pack, 'pack.mcmeta');
   expect(mcmeta.pack.description).toBe('PackMerger E2E overlay pack');
   expect(mcmeta.pack.min_format).toBe(84);
-  expect(mcmeta.pack.max_format).toBe(84);
+  expect(mcmeta.pack.max_format).toBe(97);
 });
 
 test('1.21.4+ item definitions: range_dispatch entries are unioned by threshold', async () => {
@@ -76,7 +76,7 @@ test('overlay directories get the same format-aware merge, and overlay formats a
   // overlay-pack's pm_overlay entry (which won the directory) gains one.
   const entries = entryJson(pack, 'pack.mcmeta').overlays.entries;
   expect(entries.map((e: any) => e.directory)).toEqual(['pm_overlay', 'pm_legacy']);
-  expect(entries[0].formats).toEqual({ min_inclusive: 84, max_inclusive: 84 });
+  expect(entries[0].formats).toEqual({ min_inclusive: 84, max_inclusive: 97 });
   expect(entries[1].formats).toEqual([46, 64]);
 });
 
@@ -93,7 +93,7 @@ test('/pm inspect collisions shows the item-definition threshold clash with both
     /Item definition collision in assets\/minecraft\/items\/paper\.json: .*overlay-pack and base-pack/, { since: 0 });
 });
 
-test('/pm validate passes a clean 26.1-format pack', async ({ player }) => {
+test('/pm validate passes a clean 26.1-26.3-format pack', async ({ player }) => {
   await player.makeOp();
   player.chat('/pm validate');
   await expect(player).toHaveReceivedMessage('Running validation...');

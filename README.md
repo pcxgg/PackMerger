@@ -77,12 +77,40 @@ Requires Java 25 to compile.
 
 ### End-to-end tests
 
-`./gradlew :packmerger-plugin:plugwrightTest` boots a throwaway Paper 26.1.2 server (the newest version the mineflayer bots can join; port 25567) with the
+`./gradlew :packmerger-plugin:plugwrightTest` boots a throwaway Paper 26.3 server (latest build; port 25567) with the
 built jar and fixture packs from `packmerger-plugin/src/test/e2e/fixtures/`, then drives it with
 [plugwright](https://github.com/Drownek/plugwright) bots. Specs live in `packmerger-plugin/src/test/e2e/tests/`;
 needs Node 22+, and reports land in `packmerger-plugin/build/reports/plugwright/`. Two test-only plugins built from
 `packmerger-plugin/src/e2ePlugin/` are staged next to it: `PmApiTest` uses the public API from its own
 classloader, and an empty stand-in named `ItemsAdder` lets the other-pack-host check run. Neither is shipped.
+
+The published plugwright 3.0.0 bots stop at Minecraft 26.1, so the suite runs on the
+[PCX-Network fork of plugwright](https://github.com/PCX-Network/plugwright) (branch `pcx/26.3`,
+version `3.1.0-pcx.1`), whose runner uses the PCX-Network forks of mineflayer, minecraft-protocol
+and minecraft-data with 26.3 (protocol 777) support. Neither half is published yet, so check the
+fork out next to this repository (`../plugwright`) and build it once:
+
+```bash
+cd ../plugwright
+scripts/with-local-forks.sh npm run install:packages && npm run build:packages   # runner (see its README)
+(cd gradle-plugin && ./gradlew publishToMavenLocal)                              # Gradle plugin -> ~/.m2
+```
+
+`settings.gradle` resolves the Gradle plugin from `mavenLocal()` first, and
+`packmerger-plugin/src/test/e2e/package.json` links the runner by path
+(`file:../../../../../plugwright/runner-package`). After changing the runner, delete
+`packmerger-plugin/src/test/e2e/node_modules` so the next run reinstalls it.
+
+Ports are overridable so several checkouts can run the suite at once:
+`-Pe2ePort=25580 -Pe2eRconPort=25590 -Pe2eHttpPort=25581` (or the matching `ORG_GRADLE_PROJECT_e2e*`
+environment variables). The fixture packs declare `min_format` 84 / `max_format` 97, so the
+same suite also runs on 26.1.2 by changing `minecraftVersion` in `packmerger-plugin/build.gradle`.
+
+CI (`.github/workflows/ci.yml`) runs `./gradlew build` only, which does not touch the e2e suite.
+To run the suite in CI, the job must first check out `PCX-Network/plugwright` (`pcx/26.3`) to
+`../plugwright`, build its runner and publish its Gradle plugin to Maven local as above;
+once the fork is published (the Gradle plugin to a Maven repository, the runner to an npm
+registry), point `pluginManagement` and `package.json` at those instead.
 
 ## Releasing
 

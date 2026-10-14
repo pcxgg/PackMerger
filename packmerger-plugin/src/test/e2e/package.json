@@ -4,7 +4,7 @@
     "build": "rimraf dist && tsc"
   },
   "dependencies": {
-    "@plugwright/runner": "^3.0.0"
+    "@plugwright/runner": "file:../../../../../plugwright/runner-package"
   },
   "devDependencies": {
     "@types/node": "^22.10.5",

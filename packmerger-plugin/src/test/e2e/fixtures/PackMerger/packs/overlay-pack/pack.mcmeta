@@ -2,11 +2,11 @@
   "pack": {
     "description": "PackMerger E2E overlay pack",
     "min_format": 84,
-    "max_format": 84
+    "max_format": 97
   },
   "overlays": {
     "entries": [
-      { "directory": "pm_overlay", "min_format": 84, "max_format": 84 }
+      { "directory": "pm_overlay", "min_format": 84, "max_format": 97 }
     ]
   }
 }

@@ -20,7 +20,7 @@ test('dropping a new pack into packs/ hot-reloads the merge and notifies players
   rmSync(staging, { recursive: true, force: true });
   mkdirSync(`${staging}/assets/minecraft/lang`, { recursive: true });
   writeFileSync(`${staging}/pack.mcmeta`,
-    JSON.stringify({ pack: { description: 'hotfix', min_format: 84, max_format: 84 } }));
+    JSON.stringify({ pack: { description: 'hotfix', min_format: 84, max_format: 97 } }));
   writeFileSync(`${staging}/${LANG}`, JSON.stringify({ 'pmtest.hotfix': 'Hotfix', 'pmtest.shared': 'Shared from hotfix' }));
   renameSync(staging, HOTFIX);
 
@@ -48,7 +48,7 @@ test('editing a file deep inside an unzipped pack folder hot-reloads the merge',
   rmSync(staging, { recursive: true, force: true });
   mkdirSync(`${staging}/assets/minecraft/lang`, { recursive: true });
   writeFileSync(`${staging}/pack.mcmeta`,
-    JSON.stringify({ pack: { description: 'nested', min_format: 84, max_format: 84 } }));
+    JSON.stringify({ pack: { description: 'nested', min_format: 84, max_format: 97 } }));
   writeFileSync(`${staging}/${LANG}`, JSON.stringify({ 'pmtest.nested': 'v1' }));
   renameSync(staging, nested);
   await expect.poll(async () => (await langKeys())['pmtest.nested'], { timeout: 20_000 }).toBe('v1');

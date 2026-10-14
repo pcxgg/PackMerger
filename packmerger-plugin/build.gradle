@@ -185,9 +185,10 @@ plugwright {
     testsDir.set(file('src/test/e2e'))
     environments { envs ->
         envs.create('local', me.drownek.plugwright.local.LocalMode.INSTANCE) { spec ->
-            // Newest Paper the mineflayer bots can join (minecraft-data stops at 26.1); the
-            // plugin itself is compiled against the latest Paper API (gradle/libs.versions.toml).
-            spec.minecraftVersion.set('26.1.2')
+            // Paper 26.3 (protocol 777). The published mineflayer stack stops at 26.1; the
+            // PCX-Network plugwright fork (3.1.0-pcx.1) runs the bots on the 26.3-capable
+            // forks of mineflayer / minecraft-protocol / minecraft-data.
+            spec.minecraftVersion.set('26.3')
             spec.acceptEula.set(true)
             spec.port.set(e2ePort)
             spec.rconPort.set(e2eRconPort)

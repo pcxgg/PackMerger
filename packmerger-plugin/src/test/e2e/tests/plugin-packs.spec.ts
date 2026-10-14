@@ -81,7 +81,7 @@ test('a custom adapter stages a fake plugin pack cluster, re-merges on change, a
     const staging = `${RUN_DIR}e2e-staging/gamma`;
     rmSync(staging, { recursive: true, force: true });
     mkdirSync(`${staging}/assets/pmtest`, { recursive: true });
-    writeFileSync(`${staging}/pack.mcmeta`, JSON.stringify({ pack: { description: 'gamma', min_format: 84, max_format: 84 } }));
+    writeFileSync(`${staging}/pack.mcmeta`, JSON.stringify({ pack: { description: 'gamma', min_format: 84, max_format: 97 } }));
     writeFileSync(`${staging}/assets/pmtest/fake_gamma.txt`, 'gamma');
     renameSync(staging, `${CLUSTER}/gamma`);
     await expect.poll(async () => (await entries()).includes('assets/pmtest/fake_gamma.txt'), { timeout: 20_000 })
@@ -124,7 +124,7 @@ test('a cached remote pack whose alias is no longer declared is deleted, not mer
 
   mkdirSync(cacheDir, { recursive: true });
   writeFileSync(ghost, buildZip({
-    'pack.mcmeta': JSON.stringify({ pack: { description: 'ghost', min_format: 84, max_format: 84 } }),
+    'pack.mcmeta': JSON.stringify({ pack: { description: 'ghost', min_format: 84, max_format: 97 } }),
     'assets/pmtest/ghost.txt': 'ghost',
   }));
   writeFileSync(`${cacheDir}/ghost.meta.json`, '{}');

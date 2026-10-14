@@ -74,7 +74,7 @@ test('the pack UUID stays the same when the pack content changes', async ({ play
   rmSync(staging, { recursive: true, force: true });
   mkdirSync(`${staging}/assets/minecraft/lang`, { recursive: true });
   writeFileSync(`${staging}/pack.mcmeta`,
-    JSON.stringify({ pack: { description: 'identity', min_format: 84, max_format: 84 } }));
+    JSON.stringify({ pack: { description: 'identity', min_format: 84, max_format: 97 } }));
   writeFileSync(`${staging}/${LANG}`, JSON.stringify({ 'pmtest.identity': 'Identity' }));
   renameSync(staging, EXTRA);
 

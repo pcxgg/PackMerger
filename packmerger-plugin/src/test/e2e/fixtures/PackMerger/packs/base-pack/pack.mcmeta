@@ -2,12 +2,12 @@
   "pack": {
     "description": "PackMerger E2E base pack",
     "min_format": 84,
-    "max_format": 84
+    "max_format": 97
   },
   "overlays": {
     "entries": [
       { "directory": "pm_legacy", "formats": [46, 64], "min_format": 46, "max_format": 64 },
-      { "directory": "pm_overlay", "formats": { "min_inclusive": 84, "max_inclusive": 84 }, "min_format": 84, "max_format": 84 }
+      { "directory": "pm_overlay", "formats": { "min_inclusive": 84, "max_inclusive": 97 }, "min_format": 84, "max_format": 97 }
     ]
   }
 }
