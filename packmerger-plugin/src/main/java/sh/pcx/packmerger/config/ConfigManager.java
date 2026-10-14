@@ -301,6 +301,8 @@ public class ConfigManager {
         // getPriority() / getServerPackConfig().
         profiles.clear();
         activeProfile = config.getString("active-profile", null);
+        // "" is the documented "no profile in use" value, not a profile name.
+        if (activeProfile != null && activeProfile.isBlank()) activeProfile = null;
         ConfigurationSection profilesSection = config.getConfigurationSection("profiles");
         if (profilesSection != null) {
             for (String profileName : profilesSection.getKeys(false)) {

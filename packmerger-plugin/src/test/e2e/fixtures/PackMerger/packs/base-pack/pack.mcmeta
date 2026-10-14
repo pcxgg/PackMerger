@@ -1,0 +1,7 @@
+{
+  "pack": {
+    "description": "PackMerger E2E base pack",
+    "min_format": 84,
+    "max_format": 84
+  }
+}

@@ -521,13 +521,17 @@ public class PackMergerCommand {
 
     /**
      * Writes the updated priority list back to {@code config.yml} via Bukkit's
-     * config API, invalidates the cached ConfigManager state, and triggers a
-     * re-merge. Comments in the on-disk config are lost — Bukkit's YAML writer
+     * config API (into the active profile's list when a profile is active),
+     * invalidates the cached ConfigManager state, and triggers a re-merge. Comments in the on-disk config are lost — Bukkit's YAML writer
      * doesn't preserve them. Documented behaviour; the alternative (manual
      * YAML mutation) is a rabbit hole we're not opening for this feature.
      */
     private void persistPriorityAndReMerge(CommandSender sender, List<String> updated, String what) {
-        plugin.getConfig().set("priority", updated);
+        // An active profile's priority shadows the root list (that's what getPriority()
+        // returned and the mutation was computed from), so write the change there.
+        String activeProfile = plugin.getConfigManager().getActiveProfile();
+        String key = activeProfile != null ? "profiles." + activeProfile + ".priority" : "priority";
+        plugin.getConfig().set(key, updated);
         plugin.saveConfig();
         plugin.getConfigManager().load();
         sender.sendMessage(MINI.deserialize("<green>Priority updated:</green> <gray>" + what + "</gray>"));

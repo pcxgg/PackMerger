@@ -1,0 +1,4 @@
+# Keep the throwaway E2E server from phoning home to bstats.org.
+enabled: false
+serverUuid: 00000000-0000-0000-0000-000000000000
+logFailedRequests: false

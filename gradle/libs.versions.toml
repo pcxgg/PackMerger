@@ -15,6 +15,7 @@ junit = "6.1.0"
 bstats = "3.2.1"
 velocity = "3.4.0"
 shadow = "9.4.2"
+plugwright = "3.0.0"
 
 [libraries]
 paper-api = { module = "io.papermc.paper:paper-api", version.ref = "paper" }
@@ -29,3 +30,4 @@ bstats = { module = "org.bstats:bstats-bukkit", version.ref = "bstats" }
 
 [plugins]
 shadow = { id = "com.gradleup.shadow", version.ref = "shadow" }
+plugwright = { id = "io.github.drownek.plugwright", version.ref = "plugwright" }

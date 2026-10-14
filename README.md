@@ -72,6 +72,13 @@ packmerger-plugin/build/libs/packmerger-plugin-1.2.0.jar
 
 Requires Java 25 to compile.
 
+### End-to-end tests
+
+`./gradlew :packmerger-plugin:plugwrightTest` boots a throwaway Paper 26.1.2 server (port 25567) with the
+built jar and fixture packs from `packmerger-plugin/src/test/e2e/fixtures/`, then drives it with
+[plugwright](https://github.com/Drownek/plugwright) bots. Specs live in `packmerger-plugin/src/test/e2e/tests/`;
+needs Node 22+, and reports land in `packmerger-plugin/build/reports/plugwright/`.
+
 ## Configuration
 
 The plugin generates a fully commented `config.yml` on first run. Below is a walkthrough of each section.

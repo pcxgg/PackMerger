@@ -1,6 +1,7 @@
 plugins {
     id 'java'
     alias(libs.plugins.shadow)
+    alias(libs.plugins.plugwright)
 }
 
 // group + version are set for all modules in the root build.gradle.
@@ -134,4 +135,30 @@ tasks.named('processResources') {
 
 tasks.withType(JavaCompile).configureEach {
     options.encoding = 'UTF-8'
+}
+
+// End-to-end tests: plugwright boots a real Paper server with the shaded jar and
+// drives it with mineflayer bots. Specs live in src/test/e2e; run with
+// ./gradlew :packmerger-plugin:plugwrightTest (reports in build/reports/plugwright/).
+def e2eFixtures = file('src/test/e2e/fixtures')
+plugwright {
+    testsDir.set(file('src/test/e2e'))
+    environments { envs ->
+        envs.create('local', me.drownek.plugwright.local.LocalMode.INSTANCE) { spec ->
+            spec.minecraftVersion.set('26.1.2')
+            spec.acceptEula.set(true)
+            spec.port.set(25567)
+            spec.rconPort.set(25577)
+            spec.jvmArgs.set(['-Xmx2G'])
+            // Stage fixtures/** (PackMerger config.yml + fixture packs, bStats opt-out)
+            // into plugins/ before every server start.
+            spec.writeFiles { files ->
+                fileTree(e2eFixtures).visit { details ->
+                    if (!details.directory) {
+                        files.file("plugins/${details.relativePath.pathString}", details.file)
+                    }
+                }
+            }
+        }
+    }
 }

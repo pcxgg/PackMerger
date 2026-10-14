@@ -106,10 +106,15 @@ public class PackValidator {
                 try (InputStream is = zf.getInputStream(mcmetaEntry)) {
                     String content = new String(is.readAllBytes(), StandardCharsets.UTF_8);
                     JsonObject mcmeta = JsonParser.parseString(content).getAsJsonObject();
-                    // Minecraft requires the "pack" object with a "pack_format" integer
-                    if (!mcmeta.has("pack") || !mcmeta.getAsJsonObject("pack").has("pack_format")) {
+                    // Minecraft requires a "pack" object declaring its format: either the
+                    // legacy "pack_format" or, since 1.21.9 (26.1 packs), "min_format" /
+                    // "max_format", which make "pack_format" optional.
+                    JsonObject packBlock = mcmeta.has("pack") && mcmeta.get("pack").isJsonObject()
+                            ? mcmeta.getAsJsonObject("pack") : null;
+                    if (resolveFormatDeclaration(packBlock) == null) {
                         errors++;
-                        String msg = "ERROR: pack.mcmeta is missing 'pack.pack_format' field";
+                        String msg = "ERROR: pack.mcmeta is missing 'pack.pack_format' "
+                                + "(or 'pack.min_format'/'pack.max_format') field";
                         messages.add(msg);
                         logger.error("Validation: " + msg);
                     } else {

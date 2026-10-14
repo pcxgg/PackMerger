@@ -1,0 +1,8 @@
+{
+  "parent": "minecraft:item/generated",
+  "display": {
+    "thirdperson_righthand": {
+      "scale": [1.5, 1.5, 1.5]
+    }
+  }
+}

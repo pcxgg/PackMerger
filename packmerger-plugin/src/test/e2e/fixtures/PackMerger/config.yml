@@ -1,0 +1,66 @@
+# PackMerger config for the plugwright E2E server. Staged into
+# plugins/PackMerger/config.yml before every run. Everything that would reach
+# the internet (update check, remote packs, plugin-pack discovery) is off.
+config-version: 2
+server-name: "e2e"
+priority:
+  - "overlay-pack"
+  - "base-pack"
+remote-packs: {}
+plugin-packs:
+  enabled: false
+  merge-delay-seconds: 0
+# Profiles are defined but none is active, so the root-level priority applies.
+active-profile: ""
+profiles:
+  standard:
+    priority:
+      - "overlay-pack"
+      - "base-pack"
+  inverted:
+    priority:
+      - "base-pack"
+      - "overlay-pack"
+server-packs: {}
+merge:
+  auto-merge-on-startup: true
+  optimization:
+    strip-junk-files: true
+    compression-level: 6
+    size-warning-mb: 100
+  hot-reload:
+    enabled: true
+    debounce-seconds: 1
+upload:
+  auto-upload: true
+  provider: "self-host"
+  self-host:
+    # Fixed port well away from the Minecraft/RCON ports of the concurrent E2E servers.
+    port: 28567
+    public-url: ""
+    rate-limit: 50
+distribution:
+  enabled: true
+  required: false
+  prompt-message: ""
+  use-add-resource-pack: false
+  # 3 s, so a freshly connected bot has its resourcePack listener attached first.
+  join-delay-ticks: 60
+  cache:
+    enabled: true
+  on-new-pack:
+    action: "notify"
+    notify-message: "<yellow>[PackMerger]</yellow> <gray>A new resource pack is available. Rejoin or use F3+T to reload.</gray>"
+  proxy-notify: false
+bedrock:
+  enabled: false
+validation:
+  pack-format-check: "warn"
+  rollback-on-errors: true
+  fail-on-warnings: false
+  detect-orphans: true
+  orphan-report-limit: 20
+# debug so per-player resource-pack status lines reach the server log.
+log-level: "debug"
+update-check:
+  enabled: false
