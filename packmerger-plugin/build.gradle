@@ -60,6 +60,33 @@ dependencies {
     testRuntimeOnly libs.junit.platform.launcher
 }
 
+// E2E-only plugins (never shipped): PmApiTest uses PackMerger's public API from its own
+// classloader, as a third-party plugin would; "ItemsAdder" is an empty stand-in so the
+// competing-host check sees ItemsAdder as installed. Both jars are staged into the
+// plugwright server's plugins/ folder.
+sourceSets {
+    e2ePlugin {
+        java.srcDir 'src/e2ePlugin/java'
+        compileClasspath += sourceSets.main.output + configurations.compileClasspath
+    }
+}
+
+def e2eApiTestJar = tasks.register('e2eApiTestJar', Jar) {
+    archiveFileName = 'PmApiTest.jar'
+    destinationDirectory = layout.buildDirectory.dir('e2e-plugins')
+    from(sourceSets.e2ePlugin.output) { include 'test/pmapi/ApiTestPlugin*' }
+    from('src/e2ePlugin/apitest') { include 'plugin.yml' }
+}
+def e2eFakeItemsAdderJar = tasks.register('e2eFakeItemsAdderJar', Jar) {
+    archiveFileName = 'FakeItemsAdder.jar'
+    destinationDirectory = layout.buildDirectory.dir('e2e-plugins')
+    from(sourceSets.e2ePlugin.output) { include 'test/pmapi/FakeItemsAdder*' }
+    from('src/e2ePlugin/fakeitemsadder') { include 'plugin.yml' }
+}
+tasks.matching { it.name.startsWith('plugwright') && it.name != 'plugwrightInit' }.configureEach {
+    dependsOn e2eApiTestJar, e2eFakeItemsAdderJar
+}
+
 // Generates RuntimeDependencies.java into build/generated/ from the
 // runtimeDownload configuration's resolved artifacts. Each entry is
 // { groupId, artifactId, version, base64(sha256(jarBytes)) } — the loader
@@ -149,11 +176,11 @@ def e2eRconPort = (findProperty('e2eRconPort') ?: '25577') as int
 def e2eHttpPort = (findProperty('e2eHttpPort') ?: '28567') as int
 def e2eFixtures = file('src/test/e2e/fixtures')
 // distribution.spec's first test joins a bot before the startup merge, which the fixture
-// delays by 15 s (plugin-packs.merge-delay-seconds). Filtered runs that don't include that
+// delays by 30 s (plugin-packs.merge-delay-seconds; startup to "Done" alone can take 20 s on a busy machine). Filtered runs that don't include that
 // spec merge immediately instead, so they don't wait for a pack.
 def e2eTestFiles = findProperty('testFiles')?.toString()
 def e2eTestNames = findProperty('testNames')?.toString()
-def e2eMergeDelay = (e2eTestNames == null && (e2eTestFiles == null || e2eTestFiles.contains('distribution'))) ? 15 : 0
+def e2eMergeDelay = (e2eTestNames == null && (e2eTestFiles == null || e2eTestFiles.contains('distribution'))) ? 30 : 0
 plugwright {
     testsDir.set(file('src/test/e2e'))
     environments { envs ->
@@ -173,12 +200,14 @@ plugwright {
                             files.file("plugins/PackMerger/config.yml",
                                 details.file.getText('UTF-8')
                                     .replace('port: 28567', "port: ${e2eHttpPort}")
-                                    .replace('merge-delay-seconds: 15', "merge-delay-seconds: ${e2eMergeDelay}"))
+                                    .replace('merge-delay-seconds: 30', "merge-delay-seconds: ${e2eMergeDelay}"))
                         } else {
                             files.file("plugins/${details.relativePath.pathString}", details.file)
                         }
                     }
                 }
+                files.file('plugins/PmApiTest.jar', e2eApiTestJar.get().archiveFile.get().asFile)
+                files.file('plugins/FakeItemsAdder.jar', e2eFakeItemsAdderJar.get().archiveFile.get().asFile)
                 files.file('plugins/PackMerger/e2e-ports.json',
                     groovy.json.JsonOutput.toJson([httpPort: e2eHttpPort, serverPort: e2ePort]))
             }

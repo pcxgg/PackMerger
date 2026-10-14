@@ -1,0 +1,6 @@
+name: ItemsAdder
+version: '0.0.0-e2e'
+main: test.pmapi.FakeItemsAdder
+api-version: '26.1'
+folia-supported: true
+description: PackMerger e2e stand-in for ItemsAdder (does nothing)

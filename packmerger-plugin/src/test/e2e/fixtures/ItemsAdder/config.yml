@@ -1,0 +1,14 @@
+# Stand-in for ItemsAdder's config.yml (the e2e "ItemsAdder" plugin is an empty jar).
+# Clean by default: PackMerger hosts the pack. other-hosts.spec.ts writes a
+# conflicting version and restores this one.
+resource-pack:
+  hosting:
+    no-host:
+      enabled: true
+    self-host:
+      enabled: false
+      pack-port: 8163
+  zip:
+    protect-file-from-unzip:
+      protection_1: false
+    compress-json-files: false

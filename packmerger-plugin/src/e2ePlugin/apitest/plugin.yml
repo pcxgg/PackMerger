@@ -1,0 +1,11 @@
+name: PmApiTest
+version: '1.0'
+main: test.pmapi.ApiTestPlugin
+api-version: '26.1'
+folia-supported: true
+depend: [PackMerger]
+description: PackMerger e2e test plugin (exercises the public API)
+commands:
+  pmapitest:
+    description: Drives the PackMerger API from the e2e tests
+    permission: packmerger.admin

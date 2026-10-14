@@ -3,7 +3,7 @@
 # the internet (update check, remote packs, plugin-pack discovery) is off.
 # plugin-packs.spec.ts flips the "# e2e:" marked lines to exercise discovery
 # against the fake plugin output in plugins/PmE2EFake/.
-config-version: 4
+config-version: 5
 server-name: "e2e"
 priority:
   - "overlay-pack"
@@ -13,7 +13,7 @@ plugin-packs:
   enabled: false # e2e:plugin-packs
   # Delays the startup merge so distribution.spec's first bot joins before any pack exists.
   # build.gradle rewrites this to 0 for filtered runs that don't include distribution.spec.
-  merge-delay-seconds: 15
+  merge-delay-seconds: 30
   watch:
     enabled: true
     interval-seconds: 1
@@ -51,6 +51,8 @@ merge:
   hot-reload:
     enabled: true
     debounce-seconds: 1
+  # status-ergonomics.spec checks that every merge is copied here (plugins/PmE2ECopy/).
+  output-copy-to: ["PmE2ECopy"]
 upload:
   auto-upload: true
   provider: "self-host"

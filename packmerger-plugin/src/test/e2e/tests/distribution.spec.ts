@@ -7,7 +7,7 @@ import {
 // after join — after the test body has attached its listener.
 
 // The run directory is wiped before every run (fresh install) and the fixture delays the
-// startup merge by plugin-packs.merge-delay-seconds (15 s for runs that include this file,
+// startup merge by plugin-packs.merge-delay-seconds (30 s for runs that include this file,
 // see build.gradle). This is the first spec in the suite, so its first bot joins while no
 // pack exists yet.
 test('a player who joins before the first merge is sent the pack once it is published', async ({ player, server }) => {
