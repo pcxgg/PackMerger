@@ -22,7 +22,7 @@ public class AtlasMergeStrategy implements MergeStrategy {
 
     @Override
     public boolean matches(String path) {
-        return path.toLowerCase().matches("assets/[^/]+/atlases/.+\\.json");
+        return path.toLowerCase().matches(OVERLAY_PREFIX + "assets/[^/]+/atlases/.+\\.json");
     }
 
     @Override

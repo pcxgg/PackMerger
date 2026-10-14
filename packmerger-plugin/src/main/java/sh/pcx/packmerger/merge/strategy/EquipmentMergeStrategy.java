@@ -16,7 +16,7 @@ public class EquipmentMergeStrategy implements MergeStrategy {
 
     @Override
     public boolean matches(String path) {
-        return path.toLowerCase().matches("assets/[^/]+/equipment/.+\\.json");
+        return path.toLowerCase().matches(OVERLAY_PREFIX + "assets/[^/]+/equipment/.+\\.json");
     }
 
     @Override

@@ -121,4 +121,27 @@ class MergeProvenanceTest {
         assertNull(MergeProvenance.fromJson("not json"));
         assertNull(MergeProvenance.fromJson(""));
     }
+
+    @Test
+    void notes_areRecordedCountedAndRoundTripped() {
+        MergeProvenance.Builder builder = new MergeProvenance.Builder();
+        builder.record("assets/minecraft/items/paper.json", "low.zip", "item", false);
+        assertEquals("low.zip", builder.winnerOf("assets/minecraft/items/paper.json"));
+        assertNull(builder.winnerOf("nope"));
+        builder.note("assets/minecraft/items/paper.json", "threshold 1000 is defined by both high.zip and low.zip");
+        builder.record("assets/minecraft/items/paper.json", "high.zip", "item", true);
+        builder.record("a.png", "high.zip", null, false);
+
+        MergeProvenance prov = builder.build(List.of("high.zip", "low.zip"), Instant.parse("2026-10-13T10:00:00Z"));
+        assertEquals(1, prov.notedCount());
+        assertEquals(List.of("threshold 1000 is defined by both high.zip and low.zip"),
+                prov.files().get("assets/minecraft/items/paper.json").notes());
+        assertTrue(prov.files().get("a.png").notes().isEmpty());
+
+        MergeProvenance restored = MergeProvenance.fromJson(prov.toJson());
+        assertNotNull(restored);
+        assertEquals(prov.files().get("assets/minecraft/items/paper.json").notes(),
+                restored.files().get("assets/minecraft/items/paper.json").notes());
+        assertFalse(prov.toJson().contains("\"notes\": []"), "empty notes are omitted from the sidecar");
+    }
 }

@@ -23,7 +23,7 @@ public class SoundsMergeStrategy implements MergeStrategy {
 
     @Override
     public boolean matches(String path) {
-        return path.toLowerCase().matches("assets/[^/]+/sounds\\.json");
+        return path.toLowerCase().matches(OVERLAY_PREFIX + "assets/[^/]+/sounds\\.json");
     }
 
     @Override

@@ -23,7 +23,7 @@ public class FontMergeStrategy implements MergeStrategy {
 
     @Override
     public boolean matches(String path) {
-        return path.toLowerCase().matches("assets/[^/]+/font/.+\\.json");
+        return path.toLowerCase().matches(OVERLAY_PREFIX + "assets/[^/]+/font/.+\\.json");
     }
 
     @Override

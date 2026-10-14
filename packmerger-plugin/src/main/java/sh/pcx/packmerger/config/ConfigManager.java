@@ -1,5 +1,6 @@
 package sh.pcx.packmerger.config;
 
+import sh.pcx.packmerger.merge.strategy.ModelPolicy;
 import org.bukkit.Bukkit;
 import org.bukkit.configuration.ConfigurationSection;
 import org.bukkit.configuration.file.FileConfiguration;
@@ -37,7 +38,7 @@ public class ConfigManager {
      * so {@link #load()} can surface a one-line notice on older configs (we never
      * rewrite the file, since it carries operator comments).
      */
-    private static final int CURRENT_CONFIG_VERSION = 3;
+    private static final int CURRENT_CONFIG_VERSION = 4;
 
     // -------------------------------------------------------------------------
     // General
@@ -128,6 +129,12 @@ public class ConfigManager {
 
     /** Whether to strip junk/hidden files (e.g. .DS_Store, Thumbs.db) from the merged output. */
     private boolean stripJunkFiles;
+
+    /**
+     * How models and blockstates are combined when two packs ship the same file
+     * ({@code merge.model-policy}). Defaults to whole-file since config-version 4.
+     */
+    private ModelPolicy modelPolicy = ModelPolicy.WHOLE_FILE;
 
     /** ZIP compression level (0-9). Higher = smaller file but slower compression. */
     private int compressionLevel;
@@ -351,6 +358,14 @@ public class ConfigManager {
         sizeWarningMb = config.getInt("merge.optimization.size-warning-mb", 100);
         hotReloadEnabled = config.getBoolean("merge.hot-reload.enabled", true);
         hotReloadDebounceSeconds = config.getInt("merge.hot-reload.debounce-seconds", 5);
+        String rawModelPolicy = config.getString("merge.model-policy", ModelPolicy.WHOLE_FILE.configValue());
+        ModelPolicy parsedModelPolicy = ModelPolicy.parse(rawModelPolicy);
+        if (parsedModelPolicy == null) {
+            plugin.getLogger().log(Level.WARNING, "merge.model-policy '" + rawModelPolicy
+                    + "' is not one of whole-file, deep; using whole-file.");
+            parsedModelPolicy = ModelPolicy.WHOLE_FILE;
+        }
+        modelPolicy = parsedModelPolicy;
 
         // Upload settings
         autoUpload = config.getBoolean("upload.auto-upload", true);
@@ -612,6 +627,8 @@ public class ConfigManager {
 
     /** @return {@code true} if junk files should be stripped from the merged output */
     public boolean isStripJunkFiles() { return stripJunkFiles; }
+    /** @return how colliding models and blockstates are combined ({@code merge.model-policy}) */
+    public ModelPolicy getModelPolicy() { return modelPolicy; }
 
     /** @return ZIP compression level (0-9) */
     public int getCompressionLevel() { return compressionLevel; }

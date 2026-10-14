@@ -46,16 +46,29 @@ public final class MergeProvenance {
      * @param wasMerged    {@code true} if two or more packs contributed through
      *                     a merge strategy; {@code false} otherwise (either a
      *                     single contributor, or a non-JSON overwrite)
+     * @param notes        what the merge strategy reported for this file:
+     *                     collisions it resolved (e.g. a CustomModelData or
+     *                     item-definition threshold claimed by two packs) and
+     *                     automatic rewrites (e.g. a completed overlay format
+     *                     range); empty when there was nothing to report
      */
     public record FileRecord(
             String path,
             String winner,
             List<String> contributors,
             String strategyName,
-            boolean wasMerged) {
+            boolean wasMerged,
+            List<String> notes) {
 
         public FileRecord {
             contributors = List.copyOf(contributors);
+            notes = notes == null ? List.of() : List.copyOf(notes);
+        }
+
+        /** Record without notes (pre-notes callers and older sidecars). */
+        public FileRecord(String path, String winner, List<String> contributors,
+                          String strategyName, boolean wasMerged) {
+            this(path, winner, contributors, strategyName, wasMerged, List.of());
         }
 
         /** {@code true} if more than one pack contributed to this path. */
@@ -111,6 +124,11 @@ public final class MergeProvenance {
         return (int) files.values().stream().filter(FileRecord::wasMerged).count();
     }
 
+    /** Files that carry at least one strategy note (collision resolved or automatic rewrite). */
+    public int notedCount() {
+        return (int) files.values().stream().filter(r -> !r.notes().isEmpty()).count();
+    }
+
     /** Pretty-printed JSON suitable for writing to disk. */
     public String toJson() {
         JsonObject root = new JsonObject();
@@ -132,6 +150,11 @@ public final class MergeProvenance {
                 recJson.addProperty("strategyName", rec.strategyName());
             }
             recJson.addProperty("wasMerged", rec.wasMerged());
+            if (!rec.notes().isEmpty()) {
+                JsonArray notes = new JsonArray();
+                rec.notes().forEach(notes::add);
+                recJson.add("notes", notes);
+            }
             filesJson.add(e.getKey(), recJson);
         }
         root.add("files", filesJson);
@@ -166,7 +189,11 @@ public final class MergeProvenance {
                 String strategyName = recJson.has("strategyName") && !recJson.get("strategyName").isJsonNull()
                         ? recJson.get("strategyName").getAsString() : null;
                 boolean wasMerged = recJson.has("wasMerged") && recJson.get("wasMerged").getAsBoolean();
-                files.put(path, new FileRecord(path, winner, contributors, strategyName, wasMerged));
+                List<String> notes = new ArrayList<>();
+                if (recJson.has("notes") && recJson.get("notes").isJsonArray()) {
+                    for (JsonElement n : recJson.getAsJsonArray("notes")) notes.add(n.getAsString());
+                }
+                files.put(path, new FileRecord(path, winner, contributors, strategyName, wasMerged, notes));
             }
 
             return new MergeProvenance(files, packOrder, mergedAt);
@@ -204,6 +231,20 @@ public final class MergeProvenance {
             }
         }
 
+        /**
+         * @return the pack that currently owns {@code path} (the last one recorded),
+         *         or {@code null} if nothing has contributed it yet
+         */
+        public String winnerOf(String path) {
+            MutableRecord rec = records.get(path);
+            return rec == null ? null : rec.winner;
+        }
+
+        /** Attach a strategy note (resolved collision or automatic rewrite) to {@code path}. */
+        public void note(String path, String message) {
+            records.computeIfAbsent(path, p -> new MutableRecord()).notes.add(message);
+        }
+
         /** Remove a path — used by the engine when a file is overridden by a packs-folder custom file. */
         public void remove(String path) {
             records.remove(path);
@@ -227,7 +268,8 @@ public final class MergeProvenance {
                         m.winner,
                         Collections.unmodifiableList(new ArrayList<>(m.contributors)),
                         m.strategyName,
-                        m.wasMerged));
+                        m.wasMerged,
+                        m.notes));
             }
             return new MergeProvenance(frozen, packOrder, mergedAt);
         }
@@ -237,6 +279,7 @@ public final class MergeProvenance {
             final List<String> contributors = new ArrayList<>();
             String strategyName;
             boolean wasMerged;
+            final List<String> notes = new ArrayList<>();
         }
     }
 }

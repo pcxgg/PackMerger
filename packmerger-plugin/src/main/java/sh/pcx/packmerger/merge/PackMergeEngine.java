@@ -12,6 +12,7 @@ import sh.pcx.packmerger.merge.strategy.LanguageMergeStrategy;
 import sh.pcx.packmerger.merge.strategy.MergeContext;
 import sh.pcx.packmerger.merge.strategy.MergeStrategy;
 import sh.pcx.packmerger.merge.strategy.ModelMergeStrategy;
+import sh.pcx.packmerger.merge.strategy.ModelPolicy;
 import sh.pcx.packmerger.merge.strategy.PackMcmetaMergeStrategy;
 import sh.pcx.packmerger.merge.strategy.SoundsMergeStrategy;
 
@@ -20,6 +21,7 @@ import java.nio.charset.StandardCharsets;
 import java.nio.file.*;
 import java.time.Instant;
 import java.util.*;
+import java.util.function.Supplier;
 import java.util.zip.ZipEntry;
 import java.util.zip.ZipFile;
 import java.util.zip.ZipOutputStream;
@@ -94,13 +96,16 @@ public class PackMergeEngine {
     public PackMergeEngine(PackMergerBootstrap plugin) {
         this.plugin = plugin;
         this.logger = plugin.getPluginLogger();
+        // Read on every merge so /pm reload applies a changed merge.model-policy.
+        Supplier<ModelPolicy> modelPolicy = () -> plugin.getConfigManager().getModelPolicy();
+        // Every assets/ pattern also matches the same path inside an overlay directory.
         this.mergeStrategies = List.of(
-                new PackMcmetaMergeStrategy(),    // pack.mcmeta — overlays.entries concat dedup by directory
+                new PackMcmetaMergeStrategy(),    // pack.mcmeta — overlays.entries concat dedup by directory, format range repair
                 new SoundsMergeStrategy(),        // sounds.json — checked before models/ to avoid shadowing
-                new ModelMergeStrategy(),         // models/**.json — overrides dedup by predicate
-                new BlockstateMergeStrategy(),    // blockstates/**.json — multipart cases dedup by when
+                new ModelMergeStrategy(modelPolicy),      // models/**.json — overrides dedup by predicate, sorted by CMD; rest per model-policy
+                new BlockstateMergeStrategy(modelPolicy), // blockstates/**.json — multipart dedup by when; rest per model-policy
                 new AtlasMergeStrategy(),         // atlases/**.json — sources concat (1.19.3+)
-                new ItemDefinitionMergeStrategy(),// items/**.json    — deep-merge (1.21.4+)
+                new ItemDefinitionMergeStrategy(),// items/**.json    — range_dispatch/select union, else high wins whole (1.21.4+)
                 new EquipmentMergeStrategy(),     // equipment/**.json — deep-merge (1.21.2+)
                 new FontMergeStrategy(),          // font/**.json — providers concat
                 new LanguageMergeStrategy()       // lang/**.json — translation-key union
@@ -268,6 +273,11 @@ public class PackMergeEngine {
         // Freeze provenance and persist alongside the output zip so restarts
         // don't blank the state for /pm inspect and API consumers.
         this.lastProvenance = provenance.build(orderedPacks, Instant.now());
+        int noted = this.lastProvenance.notedCount();
+        if (noted > 0) {
+            logger.merge(noted + " file(s) have merge notes (collisions resolved or metadata repaired); "
+                    + "see /pm inspect collisions or the provenance sidecar");
+        }
         writeProvenance(outputFile, this.lastProvenance);
 
         return outputFile;
@@ -618,8 +628,19 @@ public class PackMergeEngine {
 
         JsonObject existing = mergedJson.get(path);
         if (existing != null) {
-            // Already saw this file from a lower-priority pack — apply strategy merge
-            mergedJson.put(path, strategy.merge(newJson, existing, new MergeContext(path, logger::warning)));
+            // Already saw this file from a lower-priority pack — apply strategy merge.
+            // Warnings and notes go to the console and into the provenance record,
+            // so /pm inspect shows which packs collided and what was rewritten.
+            MergeContext ctx = new MergeContext(path, packName, provenance.winnerOf(path),
+                    msg -> {
+                        logger.warning(msg);
+                        provenance.note(path, msg);
+                    },
+                    msg -> {
+                        logger.debug("Merge note for " + path + ": " + msg);
+                        provenance.note(path, msg);
+                    });
+            mergedJson.put(path, strategy.merge(newJson, existing, ctx));
             provenance.record(path, packName, strategy.name(), true);
             logger.debug("JSON merged (" + strategy.name() + "): " + path);
         } else {
