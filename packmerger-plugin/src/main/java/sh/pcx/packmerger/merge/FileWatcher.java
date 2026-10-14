@@ -193,6 +193,7 @@ public class FileWatcher {
 
     /** Registers {@code start} and every non-dot directory below it. */
     private void registerTree(Path start, Path root, Map<WatchKey, Path> watchedDirs) {
+        int[] failed = {0};
         try (var dirs = Files.walk(start)) {
             dirs.filter(Files::isDirectory)
                     .filter(d -> d.equals(root) || !hasDotSegment(root.relativize(d)))
@@ -204,11 +205,17 @@ public class FileWatcher {
                                     StandardWatchEventKinds.ENTRY_DELETE);
                             watchedDirs.put(k, d);
                         } catch (IOException e) {
+                            failed[0]++;
                             logger.debug("File watcher could not watch " + d + ": " + e.getMessage());
                         }
                     });
         } catch (IOException | UncheckedIOException e) {
             logger.debug("File watcher could not scan " + start + ": " + e.getMessage());
+        }
+        if (failed[0] > 0) {
+            logger.warning("File watcher could not watch " + failed[0] + " folder(s) under " + start
+                    + "; hot-reload will miss changes there. On Linux raise fs.inotify.max_user_watches"
+                    + " (sysctl), or disable hot-reload and use /pm merge.");
         }
     }
 

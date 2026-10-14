@@ -78,8 +78,16 @@ class UploadChainTest {
         assertTrue(o.degraded());
         assertFalse(o.fallback());
         assertEquals(List.of("self-host: unreachable", "s3 is not configured"), o.notes());
-        assertEquals("self-host (not verified, nothing better available): self-host: unreachable; s3 is not configured",
+        assertEquals("self-host (not reachable from the internet, nothing better available): self-host: unreachable; s3 is not configured",
                 o.describe());
+    }
+
+    @Test
+    void failedCheckIsDescribedAsSuch() throws Exception {
+        Map<String, UploadChain.Step> steps = Map.of("self-host",
+                checkFails("http://localhost/pack", "local check failed: HTTP 503"));
+        UploadChain.Outcome o = UploadChain.run(List.of("self-host"), steps::get, FILE, "abc");
+        assertTrue(o.describe().startsWith("self-host (failed its reachability check, nothing better available)"));
     }
 
     @Test

@@ -271,6 +271,9 @@ public final class PluginPackAdapter {
                 local("megablocksurvivors", "MegaBlockSurvivors",
                         Source.pack("MegaBlockSurvivors/resourcepack", "MegaBlockSurvivors/resource_pack")),
                 local("resurrectionchest", "ResurrectionChest", Source.cluster("ResurrectionChest/resource_pack")),
+                // NOTE: the URLs below are the plugins' published download links (Dropbox, under
+                // the authors' accounts) and can go stale; operators can override the URL per adapter in
+                // config.yml (see the plugin-packs section). Verify against the authors' pages.
                 // These two plugins publish their pack only as a download. Fetched only
                 // while the plugin is installed (see config.yml for the disclosure).
                 remote("mmoinventory", "MMOInventory",

@@ -54,9 +54,11 @@ public final class UploadChain {
         /** @return a one-line description of the route for /pm status and logs */
         public String describe() {
             StringBuilder sb = new StringBuilder(provider);
-            if (fallback && degraded) sb.append(" (fallback; not verified, nothing better available)");
+            String why = notes.stream().anyMatch(n -> n.contains("check failed"))
+                    ? "failed its reachability check" : "not reachable from the internet";
+            if (fallback && degraded) sb.append(" (fallback; ").append(why).append(", nothing better available)");
             else if (fallback) sb.append(" (fallback)");
-            else if (degraded) sb.append(" (not verified, nothing better available)");
+            else if (degraded) sb.append(" (").append(why).append(", nothing better available)");
             if (!notes.isEmpty()) sb.append(": ").append(String.join("; ", notes));
             return sb.toString();
         }

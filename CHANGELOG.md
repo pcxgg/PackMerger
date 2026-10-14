@@ -6,6 +6,8 @@ project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+- Hosting route wording now distinguishes a failed reachability check from a non-routable auto host; the file watcher warns when it cannot watch every folder (inotify limit); `/pm reload` republish works on a stable copy of the output zip.
+
 Delivery reliability: every player gets the pack, every time, and the pack that is
 advertised is always the pack that is served. Self-hosting works out of the box, and
 tells you exactly what to fix when it can't.

@@ -662,9 +662,15 @@ public class PackMergerBootstrap implements PackMergerApi {
                 logger.debug("No previous merged pack to re-publish (" + reason + ")");
                 return;
             }
+            File stable = null;
             try {
-                byte[] hash = computeSha1(output);
-                PublishedPack record = publish(output, hash, true);
+                // Work on a private copy: a concurrent merge may replace output/ between
+                // hashing and uploading, which would pair this hash with different bytes.
+                stable = File.createTempFile("republish-", ".zip", output.getParentFile());
+                java.nio.file.Files.copy(output.toPath(), stable.toPath(),
+                        java.nio.file.StandardCopyOption.REPLACE_EXISTING);
+                byte[] hash = computeSha1(stable);
+                PublishedPack record = publish(stable, hash, true);
                 if (record != null) {
                     logger.info("Re-published the existing merged pack on " + reason + " (SHA1: "
                             + record.sha1Hex() + ")");
@@ -673,6 +679,8 @@ public class PackMergerBootstrap implements PackMergerApi {
                 logger.error("Could not re-publish the existing merged pack on " + reason + ": "
                         + e.getMessage(), e);
                 Bukkit.getPluginManager().callEvent(new PackUploadFailedEvent(e));
+            } finally {
+                if (stable != null) stable.delete();
             }
         });
     }
