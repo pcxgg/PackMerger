@@ -32,7 +32,7 @@ A Paper plugin that merges multiple Minecraft resource packs into a single pack,
 - **Remote pack sources** — declare HTTPS URLs in config; PackMerger downloads and caches into `packs/.remote-cache/`, honors ETag / Last-Modified, supports bearer + basic auth with env-var substitution
 - **Multiple upload providers** — self-hosted HTTP, Polymath, or any S3-compatible object store (AWS S3 / Cloudflare R2 / Backblaze B2) with content-addressed keys, retention, and optional presigned URLs
 - **Bedrock / Geyser conversion** (opt-in, experimental) — converts the merged pack's custom item icons into a Bedrock pack + Geyser custom-item mappings so Bedrock players see the same custom items, with optional auto-deploy into Geyser's folders
-- **Network-wide distribution** (optional) — a companion Velocity proxy plugin (`packmerger-velocity`) offers the merged pack to players from the proxy; backends can push live URL/hash updates to it over a plugin channel
+- **Network-wide distribution** (optional) — companion proxy plugins for Velocity (`packmerger-velocity`) and BungeeCord (`packmerger-bungee`) offer the merged pack from the proxy, one pack for the network or each backend's own; backends push updates over an HMAC-signed plugin channel, the proxy remembers the last pack across restarts and swaps it in place for online players
 - **Hot reload** — watches the packs folder, including files inside unzipped pack folders, and auto-merges with configurable debounce
 - **Reliable delivery** — the pack is sent on every join under one stable per-server pack UUID (it replaces only PackMerger's own pack, never a proxy's or another plugin's); players who join before the first merge get the pack as soon as it is published; failed downloads are re-sent automatically (bounded); the previous pack is served immediately on startup and through `/pm reload`; identical content always produces the same SHA-1; optional kick enforcement for required packs; Bedrock (Floodgate) players are skipped
 - **Per-server packs** — supports multi-server networks where each backend needs a different pack composition
@@ -209,6 +209,8 @@ distribution:
   on-new-pack:
     action: "notify"               # "none", "notify", or "resend"
     notify-message: "<yellow>[PackMerger]</yellow> <gray>A new resource pack is available. Rejoin or use F3+T to reload.</gray>"
+  proxy-notify: false              # Push each new pack to the PackMerger proxy plugin (see Proxy below)
+  proxy-secret: ""                 # Shared secret signing proxy messages; ${ENV_VAR} supported
 ```
 
 ### Logging
@@ -486,22 +488,77 @@ block/geometry models are not yet converted and are reported as warnings (enable
 `bedrock.debug` to list them). It's off by default — turn it on only if you run
 Geyser, and verify the result with a real Bedrock client.
 
-### Network-Wide Distribution (Velocity)
+### Proxy (Velocity / BungeeCord)
 
-For proxy networks, install the companion **`packmerger-velocity`** plugin on the
-proxy. It offers the merged pack to every player as they join the proxy, so you
-don't rely on each backend sending its own. It reuses whatever hosting your
-backends already use — it only needs the pack URL.
+For proxy networks, PackMerger ships two proxy plugins built from the same core:
+**`packmerger-velocity`** (Velocity 3.4+, Java 21+) and **`packmerger-bungee`** (BungeeCord
+and forks, Java 17+). They decide which pack each player should have and offer it once
+per session, under one stable pack id, so an update or a server switch replaces the pack
+in place instead of stacking a second copy. They reuse whatever hosting your backends
+already use: the proxy only needs the URL and SHA-1.
 
-Set the URL in the proxy plugin's `plugins/packmerger/config.properties`
-(`url=`, optional `sha1=`, `required=`, `prompt=`). To keep a content-addressed
-URL current automatically, set `distribution.proxy-notify: true` on your backend
-PackMerger instances: after each upload the backend relays the new URL + SHA-1 to
-the proxy over the `packmerger:pack` plugin channel (via a connected player), and
-the proxy offers the updated pack to subsequent joins.
+**Getting the pack to the proxy.** Either set `url=` (and `sha1=`) in the proxy plugin's
+`config.properties`, or set `distribution.proxy-notify: true` on the backend(s) that
+merge the pack. After every new upload the backend pushes the URL + SHA-1 to the proxy
+over the `packmerger:pack` plugin channel. Plugin messages need a connected player, so
+when nobody is online the push waits and goes out through the next player who joins
+(`/pm status` shows `Proxy link: ... update pending until a player joins`). The proxy
+stores what it was sent in `state.properties`, so a proxy restart keeps offering the
+last pushed pack; editing `url=` in `config.properties` takes over again on the next
+proxy start. With `resend-on-update=true` (default) players already online are offered
+the updated pack straight away.
 
-> Both jars are published with each release: `packmerger-plugin-<version>.jar` (backend)
-> and `packmerger-velocity-<version>.jar` (proxy).
+**Authentication.** Set the same long random secret as `secret=` in the proxy's
+`config.properties` and as `distribution.proxy-secret` in every backend's `config.yml`
+(`${NAME}` reads an environment variable on both sides). Messages are then signed with
+HMAC-SHA256 and the proxy rejects unsigned, forged and replayed (older) updates, so a
+backend without the secret can't replace the network pack. Without a secret the proxy
+accepts any backend's update and logs a warning on startup.
+
+**One pack or one per server.** `mode=network` (default) offers one pack everywhere: the
+latest one a backend published. If several backends run PackMerger with
+`proxy-notify`, list the one that owns the network pack in `accept-from=` (the proxy
+warns when two backends publish competing packs). `mode=per-server` offers each
+backend's own pack when a player connects to it (backends that never published one get
+`url=`).
+
+**Avoid the double send.** When the proxy distributes the pack, set
+`distribution.enabled: false` on the backends. Otherwise players get it twice, once from
+the backend (under the backend's pack id) and once from the proxy; PackMerger warns about
+this on startup.
+
+**BungeeCord specifics.** BungeeCord has no API to send resource packs, so the Bungee
+plugin can't send the pack itself. It asks PackMerger on the backend the player is on to
+send it, with a signed request (about a second after the player reaches the backend).
+That means:
+
+- `secret=` / `distribution.proxy-secret` is required; backends refuse unsigned requests.
+- PackMerger must be installed on the backends players connect to (with
+  `distribution.enabled: false` there). The proxy asks once per pack and session: a
+  player whose backend has no PackMerger gets the pack only after the next update or
+  login on a backend that has it.
+
+`config.properties` (created with comments on first start; keys added in a later version
+are appended to an existing file):
+
+```properties
+url=
+sha1=
+required=false
+prompt=
+secret=${PACKMERGER_SECRET}
+mode=network
+accept-from=
+resend-on-update=true
+```
+
+The data folder is `plugins/packmerger/` on Velocity and `plugins/PackMerger/` on BungeeCord.
+
+> Three jars are published with each release: `packmerger-plugin-<version>.jar` (backend),
+> `packmerger-velocity-<version>.jar` and `packmerger-bungee-<version>.jar` (proxies).
+> Update the proxy and the backends together: the 1.2 proxy plugin ignores messages from
+> newer backends (it logs them as malformed), and newer proxies only accept the old unsigned
+> format when no secret is set.
 
 ### Plugin API
 
@@ -652,6 +709,12 @@ value is whatever the highest-priority `pack.mcmeta` says.
 - Since 1.3.0 merged zips are byte-identical when their content is unchanged, so the SHA-1 only changes when a pack really changed, and clients re-use their cached download otherwise
 - If the SHA-1 still changes on every merge, one of your source packs changes on every build (for example a plugin that regenerates its zip with new content); compare two `/pm inspect export` reports
 - The old `distribution.cache` setting is gone: it skipped sending the pack on rejoin, which left returning players with no pack at all (the client drops server packs on disconnect). Remove the section from older configs and delete `plugins/PackMerger/cache/player-cache.json`
+
+### Proxy networks: pack sent twice, or the proxy offers an old pack
+
+- Players get two copies: the backends still send their own pack. Set `distribution.enabled: false` on the backends when the proxy distributes it.
+- The proxy offers an old pack: check the proxy log for `ignored a pack message from <server>: ...`. `bad signature` means the secrets differ; `not listed in accept-from` means that backend isn't allowed to publish. On the backend, `/pm status` shows `Proxy link: ...`; `update pending until a player joins` means nobody was online yet, and a `does not listen on packmerger:pack` warning means the proxy plugin isn't installed.
+- BungeeCord: nobody gets the pack from the proxy. Set the secret on both sides (the proxy logs a severe message without one) and install PackMerger on the backends.
 
 ### Pack too large / download timeouts
 

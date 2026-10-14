@@ -99,6 +99,21 @@ the way the client actually reads them.
   folder, then `plugins/Geyser-Spigot`, then `plugins/Geyser-Paper`) instead of
   assuming `Geyser-Spigot`.
 
+- **BungeeCord proxy plugin** (`packmerger-bungee`, new jar in every release). Bungee
+  has no resource-pack API, so it asks PackMerger on the player's backend to send the
+  network pack with a signed request; needs `secret` on both sides and PackMerger on
+  the backends. Same config and behaviour as the Velocity plugin otherwise.
+- **Signed proxy messages**: `distribution.proxy-secret` (backend) and `secret`
+  (proxy `config.properties`), `${ENV_VAR}` supported. Messages on `packmerger:pack`
+  carry an HMAC-SHA256; with a secret set the proxy rejects unsigned, forged and
+  replayed (older) updates. Without one it accepts any backend's update and warns.
+- **Proxy modes**: `mode=network` (default; one pack, optionally limited to the
+  backends in `accept-from=`) or `mode=per-server` (each backend's own pack, offered
+  when a player connects to it). The proxy warns when two backends publish
+  competing network packs.
+- `/pm status` shows the proxy link: notify on/off, signed or not, last relay time
+  and carrier, or "update pending until a player joins".
+
 ### Fixed
 - **Returning players got no pack.** The persistent player cache skipped the send on rejoin when the hash matched, but the client drops server packs on disconnect, so those players played without the pack (and `required` was never applied to them). The pack is now sent on every join; the client's own SHA-1 cache still avoids re-downloading an unchanged pack.
 - **Every merge was a "new pack".** Zip entries carried the current time, so identical content produced a different SHA-1 each merge (notify/resend spam, client re-downloads, S3 object churn). Merged and staged plugin zips are now deterministic (sorted entries, fixed timestamps).
@@ -162,6 +177,25 @@ the way the client actually reads them.
 - Docs drift: README's logging section described a `debug` key; the documented
   `PackMerger` class / `getApi()` example is replaced by `PackMergerApi.get()`.
 
+- **Proxy: a pack published with nobody online never reached the proxy.** The push
+  needs a connected player; it now waits and goes out through the next player who
+  joins (as soon as their connection listens on the channel). A warning names the
+  likely cause when no connection listens (proxy plugin not installed).
+- **Proxy: a proxy restart fell back to the stale `url` in config.properties.** The
+  last pack each backend pushed is kept in `state.properties`; editing `url=` still
+  takes over on the next start.
+- **Proxy: players already online kept the old pack after an update.** The proxy now
+  offers the updated pack in place (`resend-on-update`, default `true`), under one
+  stable pack id, and offers a given pack once per session instead of on every
+  server switch.
+- **Proxy: backend and proxy both sending the pack went unnoticed.** The backend
+  warns on startup and reload when `proxy-notify` is on while `distribution.enabled`
+  is true, and when proxy messages are unsigned.
+- **The Velocity plugin reported a hard-coded version (`1.2.0`).** The version now
+  comes from the build. It is also compiled for Java 21 (Velocity's minimum) instead
+  of Java 25; the Bungee jar and the shared code target Java 17.
+- `config.yml` mentioned a Bungee proxy that did not exist; it does now.
+
 ### Changed
 - **`upload.self-host.port` defaults to `-1` (Minecraft port + 1)** instead of `8080`. Configs that set a port explicitly (the generated config.yml always did, with `8080`) keep that port; only a config without the key moves to Minecraft port + 1. On hosting panels, allocate that port (or set an allocated one).
 - **`public-url` is used as a complete URL** (see Fixed). If you relied on `/pack` being appended to a URL with another path (e.g. `https://example.com/mc` meaning `https://example.com/mc/pack`), write the full URL.
@@ -196,6 +230,13 @@ the way the client actually reads them.
   notice, `/pm fixup itemsadder`). The older `protect-file-from-unzip.enabled` /
   `.extreme` keys are detected too.
 - `config-version` is now 5 (new key: `merge.output-copy-to`; no default changed).
+- `config-version` is now 6 (new key: `distribution.proxy-secret`, default empty; no
+  default changed).
+- **Proxy message format v2.** Update the proxy plugin together with the backends:
+  the 1.2 proxy plugin ignores messages from newer backends (logged as malformed);
+  newer proxies still accept the 1.2 format, but only when no secret is set. The
+  Velocity `config.properties` gains `secret`, `mode`, `accept-from` and
+  `resend-on-update` (appended with comments to an existing file).
 
 
 ## [1.2.0] — 2026-06-18
