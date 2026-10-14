@@ -33,6 +33,16 @@ public class MessageManager {
             plugin.saveResource("messages_en.yml", false);
         }
         messages = YamlConfiguration.loadConfiguration(file);
+        // Fall back to the bundled messages for keys added after the user's file was
+        // written, so upgrades never show a raw "<status.something>" placeholder.
+        java.io.InputStream bundled = plugin.getLoader().getResource("messages_en.yml");
+        if (bundled != null) {
+            try (java.io.Reader reader = new java.io.InputStreamReader(bundled, java.nio.charset.StandardCharsets.UTF_8)) {
+                messages.setDefaults(YamlConfiguration.loadConfiguration(reader));
+            } catch (java.io.IOException ignored) {
+                // Defaults are a convenience; the user's file still loads.
+            }
+        }
     }
 
     /**
