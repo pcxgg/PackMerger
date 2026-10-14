@@ -171,11 +171,10 @@ public class PackMergerBootstrap implements PackMergerApi {
     public record BedrockState(Instant at, int items, String manifestVersion, String deployedTo, String detail) {}
 
     /** {@code true} until the delayed startup merge starts: it picks up early API registrations. */
-    private volatile boolean startupMergePending;
+    private final MergeRequestState mergeState = new MergeRequestState();
 
     /** A merge requested (API registration, plugin disabled) while one was running or queued. */
-    private final AtomicBoolean mergeRequested = new AtomicBoolean(false);
-
+    
     /** A coalesced {@link #requestMerge} is scheduled. */
     private final AtomicBoolean mergeScheduled = new AtomicBoolean(false);
 
@@ -304,7 +303,7 @@ public class PackMergerBootstrap implements PackMergerApi {
         // Delay the first merge so other pack-generating plugins (Oraxen, Nexo,
         // …) have finished enabling + writing their packs before we stage them.
         if (configManager.isAutoMergeOnStartup()) {
-            startupMergePending = true;
+            mergeState.startupScheduled();
             long delaySec = configManager.getPluginPacksMergeDelaySeconds();
             // whenComplete, not thenRun: a failed remote fetch must not cancel the startup
             // merge (API registrations made while plugins enable wait for it).
@@ -512,6 +511,9 @@ public class PackMergerBootstrap implements PackMergerApi {
             if (sender != null) {
                 sender.sendMessage(messageManager.getMessage("merge.already-running"));
             }
+            // The running merge covers the startup merge too; make sure API requests are honoured again
+            // and re-run once it ends (picks up anything registered meanwhile).
+            mergeState.mergeBlockedByRunning();
             return CompletableFuture.completedFuture(null);
         }
 
@@ -519,8 +521,7 @@ public class PackMergerBootstrap implements PackMergerApi {
             sender.sendMessage(messageManager.getMessage("merge.starting"));
         }
 
-        startupMergePending = false;
-        mergeRequested.set(false);
+        mergeState.mergeStarted();
 
         // Run the entire pipeline off the main thread to avoid blocking the server tick loop
         return CompletableFuture.runAsync(() -> {
@@ -677,7 +678,7 @@ public class PackMergerBootstrap implements PackMergerApi {
                 // Always release the merge lock, even on failure
                 merging.set(false);
                 // A registration that arrived while this merge ran gets its own merge.
-                if (mergeRequested.getAndSet(false)) {
+                if (mergeState.takeDeferred()) {
                     requestMerge("a change requested during the previous merge");
                 }
             }
@@ -690,13 +691,13 @@ public class PackMergerBootstrap implements PackMergerApi {
      * runs is honoured once it finishes; requests before the startup merge are left to it.
      */
     public void requestMerge(String reason) {
-        if (startupMergePending || Bukkit.isStopping() || !loader.isEnabled()) return;
+        if (mergeState.isStartupPending() || Bukkit.isStopping() || !loader.isEnabled()) return;
         if (!mergeScheduled.compareAndSet(false, true)) return;
         logger.debug("Merge requested: " + reason);
         Bukkit.getAsyncScheduler().runDelayed(loader, t -> {
             mergeScheduled.set(false);
             if (merging.get()) {
-                mergeRequested.set(true);
+                mergeState.deferRequest();
             } else {
                 mergeAndUpload(null);
             }
@@ -889,6 +890,8 @@ public class PackMergerBootstrap implements PackMergerApi {
      * {@code debug} when on, {@code info} when off.
      */
     public void setVerbose(boolean on) {
+        // Start from the file on disk so hand edits not yet applied with /pm reload survive.
+        reloadConfig();
         getConfig().set("log-level", on ? "debug" : "info");
         saveConfig();
         configManager.load();

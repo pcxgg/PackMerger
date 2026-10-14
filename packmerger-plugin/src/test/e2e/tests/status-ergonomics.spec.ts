@@ -26,10 +26,13 @@ test('/pm verbose off|on switches debug logging at runtime and saves log-level',
   });
   await player.makeOp();
 
+  // A hand edit not yet applied with /pm reload must survive the write.
+  writeFileSync(CONFIG, original + '\n# e2e-hand-edit-marker\nhand-edit-marker-key: kept\n');
   let since = player.getMessageBufferIndex();
   player.chat('/pm verbose off');
   await expect(player).toHaveReceivedMessage('Verbose logging disabled (log-level: info, saved to config.yml)', { since });
   expect(readFileSync(CONFIG, 'utf8')).toMatch(/^log-level: (info|"info"|'info')$/m);
+  expect(readFileSync(CONFIG, 'utf8')).toContain('hand-edit-marker-key: kept');
   // Debug lines (every merge writes 'Wrote merge provenance' at debug) stop; info lines keep coming.
   let mark = serverLogMark(server);
   await consoleCommand(server, 'pm merge');

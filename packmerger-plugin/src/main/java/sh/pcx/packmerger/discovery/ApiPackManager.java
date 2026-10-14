@@ -80,7 +80,7 @@ public class ApiPackManager {
                 null, url, o.cluster(), o.allowHttp()));
     }
 
-    private boolean add(ApiPackRegistry.Registration r) {
+    private synchronized boolean add(ApiPackRegistry.Registration r) {
         boolean changed = registry.register(r);
         if (changed) {
             logger.info("[api-packs] " + r.owner() + " registered pack '" + r.alias() + "' ← " + r.sourceText());
@@ -106,14 +106,14 @@ public class ApiPackManager {
     }
 
     /** @return {@code true} if the alias was registered */
-    public boolean unregister(String alias) {
+    public synchronized boolean unregister(String alias) {
         boolean removed = registry.unregister(alias);
         if (removed) logger.info("[api-packs] unregistered pack '" + alias.toLowerCase(Locale.ROOT) + "'");
         return removed;
     }
 
     /** Drops every pack {@code owner} registered; @return the removed aliases */
-    public List<String> unregisterOwner(String owner) {
+    public synchronized List<String> unregisterOwner(String owner) {
         List<String> removed = registry.unregisterOwner(owner);
         if (!removed.isEmpty()) {
             logger.info("[api-packs] " + owner + " was disabled; unregistered " + String.join(", ", removed));

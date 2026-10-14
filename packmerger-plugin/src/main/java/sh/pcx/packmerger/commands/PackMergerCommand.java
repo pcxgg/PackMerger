@@ -322,8 +322,9 @@ public class PackMergerCommand {
     }
 
     private static String clock(java.time.Instant at) {
-        return java.time.LocalTime.ofInstant(at, java.time.ZoneId.systemDefault())
-                .truncatedTo(java.time.temporal.ChronoUnit.SECONDS).toString();
+        // LocalTime.toString() drops the seconds when they are 00; always print HH:mm:ss.
+        return java.time.format.DateTimeFormatter.ofPattern("HH:mm:ss")
+                .format(java.time.LocalTime.ofInstant(at, java.time.ZoneId.systemDefault()));
     }
 
     /** {@code /pm status}: packs registered by other plugins through the API. */
@@ -493,8 +494,7 @@ public class PackMergerCommand {
             }
         }
         sh.pcx.packmerger.upload.SelfHostProvider.Verification v = selfHost.getVerification();
-        String time = java.time.LocalTime.ofInstant(v.at(), java.time.ZoneId.systemDefault())
-                .truncatedTo(java.time.temporal.ChronoUnit.SECONDS).toString();
+        String time = clock(v.at());
         String key = switch (v.state()) {
             case PASSED -> "status.verification-passed";
             case FAILED -> "status.verification-failed";

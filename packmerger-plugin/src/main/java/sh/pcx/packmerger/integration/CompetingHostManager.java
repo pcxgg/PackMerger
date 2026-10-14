@@ -83,6 +83,7 @@ public class CompetingHostManager {
         findings = out;
 
         Set<String> dismissed = loadDismissed();
+        dismissedCache = dismissed;
         Set<String> now = new LinkedHashSet<>();
         int dismissedCount = 0;
         for (List<CompetingHosts.Finding> list : out.values()) {
@@ -110,7 +111,7 @@ public class CompetingHostManager {
 
     /** @return {@code true} if the finding was dismissed with {@code /pm fixup dismiss} */
     public boolean isDismissed(CompetingHosts.Finding f) {
-        return loadDismissed().contains(f.id());
+        return cachedDismissed().contains(f.id());
     }
 
     /**
@@ -118,7 +119,7 @@ public class CompetingHostManager {
      *         {@code null} when there is nothing to show
      */
     public List<String> joinNotice() {
-        Set<String> dismissed = loadDismissed();
+        Set<String> dismissed = cachedDismissed();
         List<String> lines = new ArrayList<>();
         for (Map.Entry<String, List<CompetingHosts.Finding>> e : findings.entrySet()) {
             List<String> keys = new ArrayList<>();
@@ -149,6 +150,7 @@ public class CompetingHostManager {
             for (CompetingHosts.Finding f : list) dismissed.add(f.id());
         }
         saveDismissed(dismissed);
+        dismissedCache = dismissed;
         return dismissed.size() - before;
     }
 
@@ -220,6 +222,17 @@ public class CompetingHostManager {
             backup = new File(cfg.getParentFile(), cfg.getName() + ".packmerger-backup-" + stamp + "-" + i);
         }
         return backup;
+    }
+
+    private volatile Set<String> dismissedCache;
+
+    private Set<String> cachedDismissed() {
+        Set<String> c = dismissedCache;
+        if (c == null) {
+            c = loadDismissed();
+            dismissedCache = c;
+        }
+        return c;
     }
 
     private Set<String> loadDismissed() {
