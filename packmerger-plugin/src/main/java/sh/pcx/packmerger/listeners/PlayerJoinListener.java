@@ -81,6 +81,19 @@ public class PlayerJoinListener implements Listener {
             }
         }
 
+        // Tell admins when players probably can't download the pack (non-routable
+        // self-host URL, failed reachability verification, or a fallback in use).
+        // Sent a few seconds after join so it isn't buried under join/MOTD messages.
+        if (player.hasPermission("packmerger.admin") && plugin.getHostingProblem() != null) {
+            player.getScheduler().runDelayed(plugin.getLoader(), task -> {
+                String hostingProblem = plugin.getHostingProblem();
+                if (hostingProblem != null) {
+                    player.sendMessage(net.kyori.adventure.text.Component.text("[PackMerger] " + hostingProblem,
+                            net.kyori.adventure.text.format.NamedTextColor.RED));
+                }
+            }, null, 40L);
+        }
+
         // Advise admins about installed pack-generating plugins that aren't being
         // merged (e.g. detected but disabled, or no generated pack found yet).
         if (plugin.getPluginPackManager() != null && player.hasPermission("packmerger.admin")) {

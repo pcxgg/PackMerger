@@ -36,6 +36,7 @@ import sh.pcx.packmerger.update.UpdateChecker;
 import sh.pcx.packmerger.upload.PolymathUploadProvider;
 import sh.pcx.packmerger.upload.S3UploadProvider;
 import sh.pcx.packmerger.upload.SelfHostProvider;
+import sh.pcx.packmerger.upload.UploadChain;
 import sh.pcx.packmerger.upload.UploadProvider;
 
 import java.io.File;
@@ -48,7 +49,10 @@ import java.time.Instant;
 import java.time.LocalDateTime;
 import java.time.format.DateTimeFormatter;
 import java.util.List;
+import java.util.Locale;
+import java.util.Map;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicReference;
@@ -103,6 +107,15 @@ public class PackMergerBootstrap implements PackMergerApi {
 
     /** The active upload provider (Polymath or self-host) used to serve the merged pack. */
     private UploadProvider uploadProvider;
+
+    /** Name of {@link #uploadProvider} ("self-host", "s3", "polymath"), after any init fallback. */
+    private volatile String uploadProviderName = "self-host";
+
+    /** Providers from {@code upload.fallback}, created on first use; cleared on re-init. */
+    private final Map<String, UploadProvider> fallbackProviders = new ConcurrentHashMap<>();
+
+    /** How the live pack was published (provider, fallback notes); {@code null} before the first publish. */
+    private volatile UploadChain.Outcome lastUploadOutcome;
 
     /** Handles sending the resource pack to individual players or all online players. */
     private PackDistributor distributor;
@@ -252,10 +265,11 @@ public class PackMergerBootstrap implements PackMergerApi {
         // Stop the file watcher thread first to prevent new merges from starting
         stopFileWatcher();
 
-        // Shut down the built-in HTTP server if self-host is the active provider
+        // Shut down the built-in HTTP server if self-host is the active provider (or a fallback)
         if (uploadProvider instanceof SelfHostProvider selfHost) {
             selfHost.stop();
         }
+        stopFallbackProviders();
 
         // Cancel any outstanding async tasks (the global-region and entity
         // schedulers auto-cancel on plugin disable, so they don't need
@@ -279,12 +293,16 @@ public class PackMergerBootstrap implements PackMergerApi {
      */
     public void initUploadProvider() {
         String provider = configManager.getUploadProvider();
+        // Fallback providers are rebuilt from the (possibly changed) config on first use.
+        // Stopped first, so a fallback self-host releases its port before a primary binds it.
+        stopFallbackProviders();
 
         // Keep a running self-host server when it stays on the same port, so the URL
         // that is already advertised keeps answering through /pm reload.
         if (uploadProvider instanceof SelfHostProvider selfHost
                 && "self-host".equalsIgnoreCase(provider) && selfHost.reconfigure()) {
             providerGeneration++;
+            uploadProviderName = "self-host";
             logger.upload("Self-host HTTP server kept running on port " + configManager.getSelfHostPort());
             return;
         }
@@ -295,7 +313,7 @@ public class PackMergerBootstrap implements PackMergerApi {
         }
 
         providerGeneration++;
-        uploadProvider = switch (provider.toLowerCase()) {
+        uploadProvider = switch (provider.toLowerCase(Locale.ROOT)) {
             case "polymath" -> new PolymathUploadProvider(this);
             case "s3" -> {
                 try {
@@ -320,6 +338,70 @@ public class PackMergerBootstrap implements PackMergerApi {
                 yield selfHost;
             }
         };
+        uploadProviderName = nameOf(uploadProvider);
+    }
+
+    private static String nameOf(UploadProvider provider) {
+        if (provider instanceof SelfHostProvider) return "self-host";
+        if (provider instanceof S3UploadProvider) return "s3";
+        if (provider instanceof PolymathUploadProvider) return "polymath";
+        return provider.getClass().getSimpleName();
+    }
+
+    /** Stops and forgets the fallback providers (their HTTP server, for a self-host fallback). */
+    private void stopFallbackProviders() {
+        for (UploadProvider p : fallbackProviders.values()) {
+            if (p instanceof SelfHostProvider selfHost) selfHost.stop();
+        }
+        fallbackProviders.clear();
+    }
+
+    /**
+     * Returns the provider for a name in the upload chain: the active provider for its own
+     * name, otherwise a fallback created on first use.
+     *
+     * @return the provider, or {@code null} if it is not configured (so the chain skips it)
+     */
+    private UploadProvider providerFor(String name) {
+        if (name.equals(uploadProviderName)) return uploadProvider;
+        UploadProvider existing = fallbackProviders.get(name);
+        if (existing != null) return existing;
+        int generation = providerGeneration;
+        UploadProvider created = switch (name) {
+            case "s3" -> {
+                try {
+                    yield new S3UploadProvider(this);
+                } catch (Exception e) {
+                    logger.debug("Fallback provider s3 is not configured: " + e.getMessage());
+                    yield null;
+                }
+            }
+            case "polymath" -> configManager.getPolymathServer().isBlank() ? null : new PolymathUploadProvider(this);
+            case "self-host" -> {
+                SelfHostProvider selfHost = new SelfHostProvider(this);
+                selfHost.start();
+                yield selfHost.isRunning() ? selfHost : null;
+            }
+            default -> {
+                logger.warning("Unknown provider '" + name + "' in upload.fallback (valid: self-host, s3, polymath)");
+                yield null;
+            }
+        };
+        if (created == null) return null;
+        if (generation != providerGeneration) {
+            // /pm reload re-initialised the providers meanwhile: don't leak this one.
+            if (created instanceof SelfHostProvider selfHost) selfHost.stop();
+            return null;
+        }
+        fallbackProviders.put(name, created);
+        return created;
+    }
+
+    /** Wraps a provider as a chain step; self-host adds its reachability verification. */
+    private static UploadChain.Step stepFor(UploadProvider provider) {
+        if (provider == null) return null;
+        if (provider instanceof UploadChain.Step step) return step;
+        return provider::upload;
     }
 
     /**
@@ -518,7 +600,20 @@ public class PackMergerBootstrap implements PackMergerApi {
                 return null; // a merge already published through this provider
             }
             String hashHex = bytesToHex(hash);
-            String url = uploadProvider.upload(file, hashHex);
+            List<String> chain = UploadChain.order(uploadProviderName, configManager.getUploadFallback());
+            UploadChain.Outcome outcome = UploadChain.run(chain, name -> stepFor(providerFor(name)), file, hashHex);
+            lastUploadOutcome = outcome;
+            String url = outcome.url();
+            SelfHostProvider selfHost = getSelfHostProvider();
+            boolean verificationFailed = selfHost != null
+                    && selfHost.getVerification().state() == SelfHostProvider.VerificationState.FAILED;
+            if (outcome.fallback() || (outcome.degraded() && verificationFailed)) {
+                // A non-routable self-host URL alone is already warned about by the provider
+                // (and shown to admins on join); a failed check or a fallback is loud.
+                String problem = "Pack hosting problem: published through " + outcome.describe();
+                logger.warning(problem);
+                alertAdmins("[PackMerger] " + problem + " (see /pm status)");
+            }
             PublishedPack record = new PublishedPack(url, hash,
                     PackIdentity.forServer(configManager.getServerName()), Instant.now(), generation);
             publishedPack.set(record);
@@ -1014,6 +1109,53 @@ public class PackMergerBootstrap implements PackMergerApi {
      *         consistent with each other), or {@code null} if nothing is published yet
      */
     public PublishedPack getPublishedPack() { return publishedPack.get(); }
+
+    /** @return how the live pack was published, or {@code null} before the first publish */
+    public UploadChain.Outcome getLastUploadOutcome() { return lastUploadOutcome; }
+
+    /** @return the name of the active upload provider ("self-host", "s3", "polymath") */
+    public String getUploadProviderName() { return uploadProviderName; }
+
+    /**
+     * @return the self-host provider whose state /pm status reports: the active provider if
+     *         it is self-host, otherwise a self-host fallback that has been started, else {@code null}
+     */
+    public SelfHostProvider getSelfHostProvider() {
+        if (uploadProvider instanceof SelfHostProvider selfHost) return selfHost;
+        return fallbackProviders.get("self-host") instanceof SelfHostProvider selfHost ? selfHost : null;
+    }
+
+    /**
+     * @return a one-paragraph notice for admins when players probably can't download the
+     *         pack (fallback used, verification failed, or a non-routable self-host URL), or
+     *         {@code null} when hosting looks healthy
+     */
+    public String getHostingProblem() {
+        UploadChain.Outcome outcome = lastUploadOutcome;
+        if (outcome == null) return null;
+        if (outcome.fallback()) {
+            return "Pack hosting problem: published through " + outcome.describe();
+        }
+        SelfHostProvider selfHost = getSelfHostProvider();
+        if (selfHost != null && "self-host".equals(outcome.provider())) {
+            if (selfHost.getVerification().state() == SelfHostProvider.VerificationState.FAILED) {
+                return "Self-host verification failed: " + selfHost.getVerification().detail();
+            }
+            if (selfHost.getResolution() != null && !selfHost.getResolution().routable()) {
+                return selfHost.getResolution().advice();
+            }
+        }
+        return outcome.degraded() ? "Pack hosting problem: published through " + outcome.describe() : null;
+    }
+
+    /** Sends a plain message to online players with {@code packmerger.admin} (thread-safe). */
+    public void alertAdmins(String message) {
+        net.kyori.adventure.text.Component text = net.kyori.adventure.text.Component.text(message,
+                net.kyori.adventure.text.format.NamedTextColor.RED);
+        for (org.bukkit.entity.Player p : Bukkit.getOnlinePlayers()) {
+            if (p.hasPermission("packmerger.admin")) p.sendMessage(text);
+        }
+    }
 
     /** @return the public download URL of the published pack, or {@code null} if none is published */
     public String getCurrentPackUrl() {
