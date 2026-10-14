@@ -53,6 +53,8 @@ dependencies {
 
     // Gson ships with paper-api at runtime; the test classpath needs it explicitly.
     testImplementation libs.gson
+    // Bukkit types without a server: YamlConfiguration (fix-up rewrite) and API signatures.
+    testImplementation libs.paper.api
     testImplementation platform(libs.junit.bom)
     testImplementation libs.junit.jupiter
     testRuntimeOnly libs.junit.platform.launcher

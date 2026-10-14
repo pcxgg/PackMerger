@@ -360,6 +360,8 @@ public class PackMergeEngine {
         // And plugin-sourced packs staged from other installed plugins
         // (Oraxen, Nexo, ItemsAdder, …), referenced by their adapter alias.
         addStagedAliases(new File(packsFolder, ".plugin-packs"), packs);
+        // And packs registered by other plugins through the API.
+        addStagedAliases(new File(packsFolder, ".api-packs"), packs);
         return packs;
     }
 
@@ -389,6 +391,8 @@ public class PackMergeEngine {
         if (remoteCached.exists()) return remoteCached;
         File pluginStaged = new File(new File(packsFolder, ".plugin-packs"), packName + ".zip");
         if (pluginStaged.exists()) return pluginStaged;
+        File apiStaged = new File(new File(packsFolder, ".api-packs"), packName + ".zip");
+        if (apiStaged.exists()) return apiStaged;
         return direct;  // return the direct path so the "not found" warning still has a sensible message
     }
 

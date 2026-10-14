@@ -11,7 +11,7 @@
 # startup if this is older than the plugin expects, so you know to review the
 # latest config.yml for newly added options. Missing keys always fall back to
 # safe defaults, so upgrades never break — this is purely informational.
-config-version: 4
+config-version: 5
 
 # =============================================================================
 # Server Identity
@@ -147,6 +147,20 @@ remote-packs:
 # restart (if any) is served right away, so players joining early still get a pack.
 # After that, the watcher below picks up rebuilt packs (e.g. /oraxen reload) on its
 # own; /pm merge forces a merge.
+#
+# ItemsAdder, Oraxen and Nexo can also host and send their own pack, so players
+# get two packs (and theirs may replace the merged one). PackMerger reads their
+# config (ItemsAdder config.yml, Oraxen/Nexo settings.yml) on startup, on
+# /pm reload and before every merge, and warns on the console, in /pm status and
+# to admins on join with the exact setting to change. It also flags ItemsAdder's
+# unzip protection and compress-json-files, which make its pack unreadable here.
+# /pm fixup <itemsadder|oraxen|nexo> backs up that plugin's config and writes the
+# change; /pm fixup dismiss hides the current warnings (stored in
+# dismissed-warnings.yml). Nothing is changed without that command.
+#
+# Plugins can also add their pack through PackMerger's API
+# (PackMergerApi.registerPack); those are staged into packs/.api-packs/ and are
+# placed in 'priority:' by the alias the plugin chose (see /pm status).
 plugin-packs:
   enabled: true
   merge-delay-seconds: 10
@@ -335,6 +349,19 @@ merge:
     # Valid values: any positive integer (recommended: 3-10)
     # Default: 5
     debounce-seconds: 5
+
+  # ---- Copy the merged pack elsewhere ----
+  # After every merge, copy the merged zip (merged-pack.zip, or
+  # <server-name>-merged-pack.zip with per-server packs) into these folders, for
+  # example a web server's document root or another plugin that serves it.
+  # Folders are relative to plugins/ unless absolute, and are created if missing.
+  # A folder inside PackMerger's packs/ is refused (it would be merged again).
+  # The copy is written to a temp file and moved into place, so a reader never
+  # sees a half-written zip. Hosting and sending are unchanged.
+  #
+  # Valid values: a folder, or a list of folders
+  # Default: [] (no copies)
+  output-copy-to: []
 
 # =============================================================================
 # Upload Settings
@@ -686,7 +713,11 @@ distribution:
 bedrock:
   enabled: false
   auto-deploy-to-geyser: true
-  # Geyser data folder. Empty = auto-detect plugins/Geyser-Spigot.
+  # Geyser data folder (absolute, or relative to the server folder).
+  # Empty = auto-detect: the data folder of an installed Geyser-* plugin, else
+  # plugins/Geyser-Spigot, else plugins/Geyser-Paper.
+  # The .mcpack's manifest version is derived from its content, so Bedrock clients
+  # download it again whenever the converted items change.
   geyser-folder: ""
   # Verbose per-item conversion logging (lists every item/model that was skipped).
   debug: false
@@ -771,6 +802,9 @@ validation:
 #   "warning" — only warnings and errors
 #   "error"   — only errors
 #
+# /pm verbose on|off switches between "debug" and "info" at runtime and saves
+# the choice here.
+#
 # Default: "info"
 log-level: "info"
 
@@ -783,8 +817,9 @@ log-level: "info"
 # admins see a one-line chat notice on join. No auto-download; everything is
 # advisory.
 #
-# Disable this if your server doesn't have outbound internet or you don't want
-# the startup HTTP call.
+# This is an outbound request to raw.githubusercontent.com (GitHub), which sees
+# your server's IP address; nothing else is sent. Disable this if your server
+# doesn't have outbound internet or you don't want the startup HTTP call.
 update-check:
   enabled: true
   url: "https://raw.githubusercontent.com/PCX-Network/PackMerger/master/versions.json"

@@ -5,8 +5,12 @@ import org.bukkit.Bukkit;
 import org.bukkit.Server;
 import org.bukkit.configuration.file.FileConfiguration;
 import org.bukkit.plugin.Plugin;
+import org.bukkit.plugin.ServicePriority;
 import org.bukkit.plugin.java.JavaPlugin;
 import sh.pcx.packmerger.api.PackMergerApi;
+import sh.pcx.packmerger.api.PackOptions;
+import sh.pcx.packmerger.api.RegisteredPack;
+import sh.pcx.packmerger.api.events.PackMergerCollectPacksEvent;
 import sh.pcx.packmerger.api.events.PackBedrockConvertedEvent;
 import sh.pcx.packmerger.api.events.PackMergeStartedEvent;
 import sh.pcx.packmerger.api.events.PackMergedEvent;
@@ -24,7 +28,12 @@ import sh.pcx.packmerger.config.MessageManager;
 import sh.pcx.packmerger.distribution.PackDistributor;
 import sh.pcx.packmerger.distribution.PackIdentity;
 import sh.pcx.packmerger.distribution.PublishedPack;
+import sh.pcx.packmerger.discovery.ApiPackManager;
+import sh.pcx.packmerger.integration.CompetingHostManager;
+import sh.pcx.packmerger.integration.GeyserFolder;
+import sh.pcx.packmerger.merge.OutputCopier;
 import sh.pcx.packmerger.discovery.PluginPackManager;
+import sh.pcx.packmerger.listeners.PluginDisableListener;
 import sh.pcx.packmerger.listeners.PlayerJoinListener;
 import sh.pcx.packmerger.merge.FileWatcher;
 import sh.pcx.packmerger.merge.MergeProvenance;
@@ -129,6 +138,47 @@ public class PackMergerBootstrap implements PackMergerApi {
     /** Checks for newer PackMerger releases on enable. */
     private UpdateChecker updateChecker;
 
+    /** Packs registered by other plugins through the API, staged into {@code packs/.api-packs/}. */
+    private ApiPackManager apiPackManager;
+
+    /** Detects ItemsAdder/Oraxen/Nexo hosting their own pack; backs {@code /pm fixup}. */
+    private CompetingHostManager competingHostManager;
+
+    /** Result of the last upload attempt (merge or re-publish), for /pm status. */
+    private volatile UploadAttempt lastUploadAttempt;
+
+    /** Result of the last Bedrock conversion, for /pm status. */
+    private volatile BedrockState lastBedrock;
+
+    /**
+     * The last upload attempt.
+     *
+     * @param at     when it finished
+     * @param ok     whether it published a pack
+     * @param detail the URL, or the error
+     */
+    public record UploadAttempt(Instant at, boolean ok, String detail) {}
+
+    /**
+     * The last Bedrock conversion.
+     *
+     * @param at             when it ran
+     * @param items          items converted
+     * @param manifestVersion the .mcpack manifest version (changes with the content)
+     * @param deployedTo     Geyser folder it was copied into, or {@code null}
+     * @param detail         a note (no items, Geyser folder missing, error)
+     */
+    public record BedrockState(Instant at, int items, String manifestVersion, String deployedTo, String detail) {}
+
+    /** {@code true} until the delayed startup merge starts: it picks up early API registrations. */
+    private volatile boolean startupMergePending;
+
+    /** A merge requested (API registration, plugin disabled) while one was running or queued. */
+    private final AtomicBoolean mergeRequested = new AtomicBoolean(false);
+
+    /** A coalesced {@link #requestMerge} is scheduled. */
+    private final AtomicBoolean mergeScheduled = new AtomicBoolean(false);
+
     /**
      * The pack currently offered to players: an immutable (url, sha1, uuid) record that
      * is only replaced, as a whole, after an upload succeeded. {@code null} until the
@@ -189,6 +239,8 @@ public class PackMergerBootstrap implements PackMergerApi {
         remotePackManager = new RemotePackManager(this);
         pluginPackManager = new PluginPackManager(this);
         pluginPackManager.reconfigure();
+        apiPackManager = new ApiPackManager(this);
+        competingHostManager = new CompetingHostManager(this);
         updateChecker = new UpdateChecker(this);
 
         // Poll versions.json off the main thread so a slow GitHub response
@@ -227,6 +279,11 @@ public class PackMergerBootstrap implements PackMergerApi {
 
         // Register event listeners for player join and resource pack status tracking
         Bukkit.getPluginManager().registerEvents(new PlayerJoinListener(this), loader);
+        // Drop API-registered packs of plugins that are disabled.
+        Bukkit.getPluginManager().registerEvents(new PluginDisableListener(this), loader);
+
+        // Publish the API for other plugins (PackMergerApi.get()).
+        Bukkit.getServicesManager().register(PackMergerApi.class, this, loader, ServicePriority.Normal);
 
         // Outgoing channel used to relay the current pack URL/hash to a Velocity/
         // Bungee proxy for network-wide distribution (see distribution.proxy-notify).
@@ -247,8 +304,14 @@ public class PackMergerBootstrap implements PackMergerApi {
         // Delay the first merge so other pack-generating plugins (Oraxen, Nexo,
         // …) have finished enabling + writing their packs before we stage them.
         if (configManager.isAutoMergeOnStartup()) {
+            startupMergePending = true;
             long delaySec = configManager.getPluginPacksMergeDelaySeconds();
-            remoteFetch.thenRun(() -> {
+            // whenComplete, not thenRun: a failed remote fetch must not cancel the startup
+            // merge (API registrations made while plugins enable wait for it).
+            remoteFetch.whenComplete((ignored, fetchError) -> {
+                if (fetchError != null) {
+                    logger.warning("Remote pack fetch on startup failed: " + fetchError.getMessage());
+                }
                 if (delaySec <= 0) {
                     mergeAndUpload(null);
                 } else {
@@ -257,6 +320,11 @@ public class PackMergerBootstrap implements PackMergerApi {
                 }
             });
         }
+
+        // Check whether ItemsAdder/Oraxen/Nexo host their own pack, once every plugin
+        // has enabled (the first tick runs after startup) and off the main thread.
+        Bukkit.getGlobalRegionScheduler().run(loader, t ->
+                Bukkit.getAsyncScheduler().runNow(loader, a -> competingHostManager.scan()));
 
         // Start watching for file changes in the packs folder (hot-reload)
         startFileWatcher();
@@ -451,6 +519,9 @@ public class PackMergerBootstrap implements PackMergerApi {
             sender.sendMessage(messageManager.getMessage("merge.starting"));
         }
 
+        startupMergePending = false;
+        mergeRequested.set(false);
+
         // Run the entire pipeline off the main thread to avoid blocking the server tick loop
         return CompletableFuture.runAsync(() -> {
             try {
@@ -467,6 +538,16 @@ public class PackMergerBootstrap implements PackMergerApi {
                 // Re-run on every merge so fresh plugin output is always captured.
                 if (pluginPackManager != null) {
                     pluginPackManager.stageAll();
+                }
+                // Let plugins contribute packs lazily, then stage every API-registered pack
+                // into packs/.api-packs/ (and drop the ones no longer registered).
+                if (apiPackManager != null) {
+                    Bukkit.getPluginManager().callEvent(new PackMergerCollectPacksEvent(this));
+                    apiPackManager.stageAll();
+                }
+                // Re-check other item plugins' hosting settings (they may have changed them).
+                if (competingHostManager != null) {
+                    competingHostManager.scan();
                 }
                 // Drop cached downloads of remote packs that are no longer declared,
                 // so removing a remote-packs entry actually removes the pack.
@@ -555,6 +636,9 @@ public class PackMergerBootstrap implements PackMergerApi {
                 // output and validation result before it's shipped.
                 Bukkit.getPluginManager().callEvent(new PackMergedEvent(outputFile, hash, provenance, validationResult));
 
+                // Copy the merged zip to merge.output-copy-to (serve it with something else).
+                copyOutput(outputFile);
+
                 // Convert to a Bedrock pack for Geyser players (opt-in; off by default).
                 convertBedrockIfEnabled(outputFile);
 
@@ -563,6 +647,7 @@ public class PackMergerBootstrap implements PackMergerApi {
                 if (configManager.isAutoUpload()) {
                     try {
                         PublishedPack record = publish(outputFile, hash, false);
+                        lastUploadAttempt = new UploadAttempt(Instant.now(), true, record.url());
                         if (sender != null) {
                             sender.sendMessage(messageManager.getMessage("merge.upload-complete",
                                             "url", record.url()));
@@ -570,6 +655,7 @@ public class PackMergerBootstrap implements PackMergerApi {
                     } catch (Exception e) {
                         logger.error("Upload failed; players keep getting the previously published pack"
                                 + (publishedPack.get() == null ? " (none yet)" : ""), e);
+                        lastUploadAttempt = new UploadAttempt(Instant.now(), false, String.valueOf(e.getMessage()));
                         Bukkit.getPluginManager().callEvent(new PackUploadFailedEvent(e));
                         if (sender != null) {
                             sender.sendMessage(messageManager.getMessage("merge.upload-failed",
@@ -590,8 +676,31 @@ public class PackMergerBootstrap implements PackMergerApi {
             } finally {
                 // Always release the merge lock, even on failure
                 merging.set(false);
+                // A registration that arrived while this merge ran gets its own merge.
+                if (mergeRequested.getAndSet(false)) {
+                    requestMerge("a change requested during the previous merge");
+                }
             }
         });
+    }
+
+    /**
+     * Schedules a merge for an API change (pack registered/unregistered, owner disabled).
+     * Requests within a second are coalesced into one merge; a request made while a merge
+     * runs is honoured once it finishes; requests before the startup merge are left to it.
+     */
+    public void requestMerge(String reason) {
+        if (startupMergePending || Bukkit.isStopping() || !loader.isEnabled()) return;
+        if (!mergeScheduled.compareAndSet(false, true)) return;
+        logger.debug("Merge requested: " + reason);
+        Bukkit.getAsyncScheduler().runDelayed(loader, t -> {
+            mergeScheduled.set(false);
+            if (merging.get()) {
+                mergeRequested.set(true);
+            } else {
+                mergeAndUpload(null);
+            }
+        }, 1, TimeUnit.SECONDS);
     }
 
     /**
@@ -672,10 +781,12 @@ public class PackMergerBootstrap implements PackMergerApi {
                 byte[] hash = computeSha1(stable);
                 PublishedPack record = publish(stable, hash, true);
                 if (record != null) {
+                    lastUploadAttempt = new UploadAttempt(Instant.now(), true, record.url());
                     logger.info("Re-published the existing merged pack on " + reason + " (SHA1: "
                             + record.sha1Hex() + ")");
                 }
             } catch (Exception e) {
+                lastUploadAttempt = new UploadAttempt(Instant.now(), false, String.valueOf(e.getMessage()));
                 logger.error("Could not re-publish the existing merged pack on " + reason + ": "
                         + e.getMessage(), e);
                 Bukkit.getPluginManager().callEvent(new PackUploadFailedEvent(e));
@@ -739,6 +850,14 @@ public class PackMergerBootstrap implements PackMergerApi {
             pluginPackManager.reconfigure();
             pluginPackManager.startWatcher();
         }
+        if (apiPackManager != null) {
+            apiPackManager.reconfigure();
+            apiPackManager.refreshDownloads();
+        }
+
+        if (competingHostManager != null) {
+            Bukkit.getAsyncScheduler().runNow(loader, a -> competingHostManager.scan());
+        }
 
         if (remotePackManager != null && !configManager.getRemotePacks().isEmpty()) {
             List<FetchResult> results = remotePackManager.fetchAll(
@@ -752,6 +871,29 @@ public class PackMergerBootstrap implements PackMergerApi {
 
     /** @return the plugin-pack manager (auto-discovery), or {@code null} before onEnable completes */
     public PluginPackManager getPluginPackManager() { return pluginPackManager; }
+
+    /** @return the API pack manager, or {@code null} before onEnable completes */
+    public ApiPackManager getApiPackManager() { return apiPackManager; }
+
+    /** @return the competing-host check, or {@code null} before onEnable completes */
+    public CompetingHostManager getCompetingHostManager() { return competingHostManager; }
+
+    /** @return the last upload attempt, or {@code null} if none happened yet */
+    public UploadAttempt getLastUploadAttempt() { return lastUploadAttempt; }
+
+    /** @return the last Bedrock conversion, or {@code null} if none ran */
+    public BedrockState getLastBedrock() { return lastBedrock; }
+
+    /**
+     * Switches verbose (debug) logging and persists it as {@code log-level} in config.yml:
+     * {@code debug} when on, {@code info} when off.
+     */
+    public void setVerbose(boolean on) {
+        getConfig().set("log-level", on ? "debug" : "info");
+        saveConfig();
+        configManager.load();
+        logger.setLevel(configManager.getLogLevel());
+    }
 
     /** @return the update checker, or {@code null} before onEnable completes */
     public UpdateChecker getUpdateChecker() { return updateChecker; }
@@ -861,33 +1003,62 @@ public class PackMergerBootstrap implements PackMergerApi {
             if (!result.producedAnything()) {
                 logger.info("[bedrock] no convertible custom items found ("
                         + result.warnings().size() + " note(s); enable bedrock.debug for detail)");
+                lastBedrock = new BedrockState(Instant.now(), 0, null, null,
+                        "no convertible custom items (" + result.warnings().size() + " note(s))");
                 return;
             }
             logger.info("[bedrock] converted " + result.itemsConverted() + " item(s), "
-                    + result.texturesCopied() + " texture(s) → " + result.mcpackFile().getFileName());
+                    + result.texturesCopied() + " texture(s) → " + result.mcpackFile().getFileName()
+                    + " (manifest version " + result.manifestVersion() + ")");
 
+            String deployedTo = null;
+            String note = "not deployed (auto-deploy-to-geyser is off)";
             if (configManager.isBedrockAutoDeploy()) {
-                deployToGeyser(result);
+                File geyser = deployToGeyser(result);
+                deployedTo = geyser == null ? null : geyser.getPath();
+                note = geyser == null ? "Geyser folder not found; set bedrock.geyser-folder"
+                        : "restart or reload Geyser to apply";
             }
+            lastBedrock = new BedrockState(Instant.now(), result.itemsConverted(), result.manifestVersion(),
+                    deployedTo, note);
             Bukkit.getPluginManager().callEvent(new PackBedrockConvertedEvent(
                     result.mcpackFile().toString(),
                     result.geyserMappingsFile() == null ? null : result.geyserMappingsFile().toString(),
                     result.itemsConverted()));
         } catch (Exception e) {
             logger.error("[bedrock] conversion failed (" + e.getMessage() + ")", e);
+            lastBedrock = new BedrockState(Instant.now(), 0, null, null, "conversion failed: " + e.getMessage());
         }
     }
 
-    /** Copies the generated {@code .mcpack} + mappings into the Geyser data folder. */
-    private void deployToGeyser(BedrockConversionResult result) {
-        String override = configManager.getBedrockGeyserFolder();
-        File geyserFolder = (override != null && !override.isBlank())
-                ? new File(override)
-                : new File(getLoader().getDataFolder().getParentFile(), "Geyser-Spigot");
-        if (!geyserFolder.isDirectory()) {
-            logger.warning("[bedrock] Geyser folder not found at " + geyserFolder.getPath()
+    /**
+     * @return Geyser's data folder: {@code bedrock.geyser-folder} if set, else the data
+     *         folder of an installed {@code Geyser-*} plugin, else {@code plugins/Geyser-Spigot}
+     *         or {@code plugins/Geyser-Paper}; {@code null} if none was found
+     */
+    public File resolveGeyserFolder() {
+        File plugins = getDataFolder().getAbsoluteFile().getParentFile();
+        List<File> installed = new java.util.ArrayList<>();
+        for (Plugin p : Bukkit.getPluginManager().getPlugins()) {
+            if (p.getName().startsWith("Geyser-")) installed.add(p.getDataFolder());
+        }
+        return GeyserFolder.resolve(configManager.getBedrockGeyserFolder(), plugins.getParentFile(), plugins,
+                installed);
+    }
+
+    /**
+     * Copies the generated {@code .mcpack} + mappings into the Geyser data folder.
+     *
+     * @return the folder deployed into, or {@code null} if it was not found or the copy failed
+     */
+    private File deployToGeyser(BedrockConversionResult result) {
+        File geyserFolder = resolveGeyserFolder();
+        if (geyserFolder == null || !geyserFolder.isDirectory()) {
+            logger.warning("[bedrock] Geyser folder not found"
+                    + (geyserFolder == null ? " (looked for an installed Geyser-* plugin, plugins/Geyser-Spigot and plugins/Geyser-Paper)"
+                    : " at " + geyserFolder.getPath())
                     + " — skipping auto-deploy (set bedrock.geyser-folder)");
-            return;
+            return null;
         }
         try {
             File packs = new File(geyserFolder, "packs");
@@ -904,8 +1075,24 @@ public class PackMergerBootstrap implements PackMergerApi {
             }
             logger.info("[bedrock] deployed to Geyser at " + geyserFolder.getPath()
                     + " (restart Geyser or run its reload to apply)");
+            return geyserFolder;
         } catch (IOException e) {
             logger.warning("[bedrock] auto-deploy failed: " + e.getMessage());
+            return null;
+        }
+    }
+
+    /** Copies the merged zip into every {@code merge.output-copy-to} folder (best-effort). */
+    private void copyOutput(File outputFile) {
+        List<String> targets = configManager.getOutputCopyTo();
+        if (targets.isEmpty()) return;
+        File plugins = getDataFolder().getAbsoluteFile().getParentFile();
+        for (OutputCopier.Result r : OutputCopier.copy(outputFile, targets, plugins, getPacksFolder())) {
+            if (r.ok()) {
+                logger.info("[output] copied merged pack to " + r.file().getPath());
+            } else {
+                logger.warning("[output] could not copy merged pack to " + r.target() + ": " + r.detail());
+            }
         }
     }
 
@@ -1103,6 +1290,42 @@ public class PackMergerBootstrap implements PackMergerApi {
     @Override
     public CompletableFuture<Void> triggerMerge() {
         return mergeAndUpload(null);
+    }
+
+    @Override
+    public void registerPack(Plugin owner, String alias, java.nio.file.Path source, PackOptions options) {
+        if (apiPackManager.register(owner, alias, source, options)
+                && (options == null || options.mergeNow())) {
+            requestMerge("pack '" + alias + "' registered by " + owner.getName());
+        }
+    }
+
+    @Override
+    public void registerPack(Plugin owner, String alias, java.net.URI url, PackOptions options) {
+        if (apiPackManager.register(owner, alias, url, options)
+                && (options == null || options.mergeNow())) {
+            requestMerge("pack '" + alias + "' registered by " + owner.getName());
+        }
+    }
+
+    @Override
+    public boolean unregisterPack(String alias) {
+        boolean removed = apiPackManager.unregister(alias);
+        if (removed) requestMerge("pack '" + alias + "' unregistered");
+        return removed;
+    }
+
+    @Override
+    public List<RegisteredPack> getRegisteredPacks() {
+        return apiPackManager == null ? List.of() : apiPackManager.list();
+    }
+
+    /** Called when another plugin is disabled: drops the packs it registered. */
+    public void onPluginDisabled(Plugin disabled) {
+        if (apiPackManager == null || disabled == loader) return;
+        if (!apiPackManager.unregisterOwner(disabled.getName()).isEmpty()) {
+            requestMerge(disabled.getName() + " was disabled");
+        }
     }
 
     /**

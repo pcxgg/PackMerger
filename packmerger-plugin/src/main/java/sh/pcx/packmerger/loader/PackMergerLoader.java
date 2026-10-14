@@ -205,6 +205,50 @@ public class PackMergerLoader extends JavaPlugin {
     }
 
     /**
+     * Public API types: always loaded by the server's plugin classloader (the parent),
+     * never by the isolated one. Other plugins compile against these and resolve them
+     * through PackMerger's plugin classloader; if the bootstrap used its own isolated
+     * copies, {@code bootstrap instanceof PackMergerApi} would be false for them and the
+     * events PackMerger fires would have a different {@code HandlerList} than the one
+     * their listeners registered with, so they would never be delivered. Every type that
+     * appears in an API signature must be listed here too.
+     */
+    static final String[] SHARED_API_PREFIXES = {
+            "sh.pcx.packmerger.api.",
+            "sh.pcx.packmerger.merge.MergeProvenance",          // + nested $FileRecord, $Builder
+            "sh.pcx.packmerger.merge.PackValidator$ValidationResult"
+    };
+
+    /**
+     * @return {@code true} if {@code className} is loaded from the isolated classpath
+     *         (dependencies and PackMerger internals), {@code false} if it is delegated to
+     *         the server's plugin classloader (the loader itself, the public API, Bukkit,
+     *         the JDK and other plugins)
+     */
+    static boolean loadsFromIsolated(String className) {
+        // Loader classes stay in the parent classloader — they're the entry point.
+        if (className.startsWith("sh.pcx.packmerger.loader.")) return false;
+        for (String prefix : SHARED_API_PREFIXES) {
+            if (className.startsWith(prefix)) return false;
+        }
+        for (String prefix : IsolatedURLClassLoader.SELF_LOAD_PREFIXES) {
+            if (className.startsWith(prefix)) return true;
+        }
+        return false;
+    }
+
+    /**
+     * @return PackMerger's API, for plugins that look PackMerger up by name. The usual way
+     *         is {@code Bukkit.getServicesManager().load(PackMergerApi.class)} or
+     *         {@link sh.pcx.packmerger.api.PackMergerApi#get()}.
+     * @throws IllegalStateException if PackMerger failed to load
+     */
+    public sh.pcx.packmerger.api.PackMergerApi getApi() {
+        if (bootstrap instanceof sh.pcx.packmerger.api.PackMergerApi api) return api;
+        throw new IllegalStateException("PackMerger is not loaded");
+    }
+
+    /**
      * Loads plugin + dependency classes from the isolated classpath before
      * falling back to the parent classloader. Without this, the server's
      * classloader intercepts plugin classes before the isolated jar's
@@ -217,7 +261,7 @@ public class PackMergerLoader extends JavaPlugin {
          * first. Everything else (Bukkit API, JDK, other plugins) falls
          * through to the parent classloader.
          */
-        private static final String[] SELF_LOAD_PREFIXES = {
+        static final String[] SELF_LOAD_PREFIXES = {
                 "io.minio.",
                 "okhttp3.",
                 "okio.",
@@ -256,12 +300,7 @@ public class PackMergerLoader extends JavaPlugin {
         }
 
         private boolean shouldLoadFromSelf(String name) {
-            // Loader classes stay in the parent classloader — they're the entry point.
-            if (name.startsWith("sh.pcx.packmerger.loader.")) return false;
-            for (String prefix : SELF_LOAD_PREFIXES) {
-                if (name.startsWith(prefix)) return true;
-            }
-            return false;
+            return loadsFromIsolated(name);
         }
     }
 }

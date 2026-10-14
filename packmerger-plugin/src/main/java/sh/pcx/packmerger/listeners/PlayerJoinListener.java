@@ -103,6 +103,18 @@ public class PlayerJoinListener implements Listener {
             }
         }
 
+        // Tell admins when ItemsAdder/Oraxen/Nexo also host or send their own pack (or
+        // protect it against unzipping), unless dismissed with /pm fixup dismiss.
+        if (plugin.getCompetingHostManager() != null && player.hasPermission("packmerger.admin")
+                && !plugin.getCompetingHostManager().getFindings().isEmpty()) {
+            player.getScheduler().runDelayed(plugin.getLoader(), task -> {
+                for (String line : plugin.getCompetingHostManager().joinNotice()) {
+                    player.sendMessage(net.kyori.adventure.text.Component.text(line,
+                            net.kyori.adventure.text.format.NamedTextColor.GOLD));
+                }
+            }, null, 40L);
+        }
+
         if (!plugin.getConfigManager().isDistributionEnabled()) return;
 
         // A new client session starts without any server pack.

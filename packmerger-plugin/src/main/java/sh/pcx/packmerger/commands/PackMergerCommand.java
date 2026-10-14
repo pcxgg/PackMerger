@@ -76,6 +76,8 @@ public class PackMergerCommand {
      *   ├── merge     — re-stage plugin packs, merge and upload (no config reload)
      *   ├── validate  — validate current merged pack
      *   ├── status    — show plugin status
+     *   ├── verbose [on|off] — show or toggle debug logging (persisted as log-level)
+     *   ├── fixup [itemsadder|oraxen|nexo|dismiss] — hand pack hosting to PackMerger
      *   └── apply     — force-send pack
      *       └── [player] — optional player selector
      * </pre>
@@ -95,6 +97,22 @@ public class PackMergerCommand {
                                     .executes(this::handleValidate))
                             .then(Commands.literal("status")
                                     .executes(this::handleStatus))
+                            .then(Commands.literal("verbose")
+                                    .executes(this::handleVerboseShow)
+                                    .then(Commands.literal("on")
+                                            .executes(ctx -> handleVerboseSet(ctx, true)))
+                                    .then(Commands.literal("off")
+                                            .executes(ctx -> handleVerboseSet(ctx, false))))
+                            .then(Commands.literal("fixup")
+                                    .executes(this::handleFixupList)
+                                    .then(Commands.literal("dismiss")
+                                            .executes(this::handleFixupDismiss))
+                                    .then(Commands.literal("itemsadder")
+                                            .executes(ctx -> handleFixup(ctx, "itemsadder")))
+                                    .then(Commands.literal("oraxen")
+                                            .executes(ctx -> handleFixup(ctx, "oraxen")))
+                                    .then(Commands.literal("nexo")
+                                            .executes(ctx -> handleFixup(ctx, "nexo"))))
                             .then(Commands.literal("apply")
                                     .executes(this::handleApplyAll)
                                     .then(Commands.argument("player", ArgumentTypes.player())
@@ -241,6 +259,13 @@ public class PackMergerCommand {
         sender.sendMessage(msg.getMessage("status.pack-url",
                 "url", url != null ? url : "N/A"));
         sendHostingStatus(sender, msg);
+        var attempt = plugin.getLastUploadAttempt();
+        if (attempt == null) {
+            sender.sendMessage(msg.getMessage("status.last-upload-none"));
+        } else {
+            sender.sendMessage(msg.getMessage(attempt.ok() ? "status.last-upload-ok" : "status.last-upload-failed",
+                    "time", clock(attempt.at()), "detail", attempt.detail()));
+        }
 
         String hash = plugin.getCurrentPackHashHex();
         sender.sendMessage(msg.getMessage("status.sha1",
@@ -280,8 +305,167 @@ public class PackMergerCommand {
             List<String> merged = plugin.getPluginPackManager().getMergedAliases();
             sender.sendMessage(msg.getMessage("status.plugin-packs",
                     "packs", merged.isEmpty() ? "none" : String.join(", ", merged)));
+            for (String state : plugin.getPluginPackManager().getIntegrationStates()) {
+                sender.sendMessage(msg.getMessage("status.integration", "state", state));
+            }
+        } else {
+            sender.sendMessage(msg.getMessage("status.plugin-packs-off"));
         }
+        sendApiPackStatus(sender, msg);
+        sendCompetingHostStatus(sender, msg);
+        sendBedrockStatus(sender, msg);
+        boolean verbose = "debug".equalsIgnoreCase(plugin.getConfigManager().getLogLevel());
+        sender.sendMessage(msg.getMessage("status.logging",
+                "level", plugin.getConfigManager().getLogLevel(), "verbose", verbose ? "on" : "off"));
 
+        return 1;
+    }
+
+    private static String clock(java.time.Instant at) {
+        return java.time.LocalTime.ofInstant(at, java.time.ZoneId.systemDefault())
+                .truncatedTo(java.time.temporal.ChronoUnit.SECONDS).toString();
+    }
+
+    /** {@code /pm status}: packs registered by other plugins through the API. */
+    private void sendApiPackStatus(CommandSender sender, MessageManager msg) {
+        var registered = plugin.getRegisteredPacks();
+        if (registered.isEmpty()) return;
+        List<String> merged = plugin.getApiPackManager().getMergedAliases();
+        List<String> parts = new java.util.ArrayList<>();
+        for (var r : registered) {
+            parts.add(r.alias() + " (" + r.owner() + (merged.contains(r.alias()) ? "" : ", not merged yet") + ")");
+        }
+        sender.sendMessage(msg.getMessage("status.api-packs", "packs", String.join(", ", parts)));
+    }
+
+    /** {@code /pm status}: item plugins that host/send/protect their own pack. */
+    private void sendCompetingHostStatus(CommandSender sender, MessageManager msg) {
+        sh.pcx.packmerger.integration.CompetingHostManager hosts = plugin.getCompetingHostManager();
+        if (hosts == null) return;
+        var findings = hosts.getFindings();
+        boolean any = false;
+        for (var entry : findings.entrySet()) {
+            for (var f : entry.getValue()) {
+                any = true;
+                sender.sendMessage(msg.getMessage(hosts.isDismissed(f) ? "status.host-conflict-dismissed"
+                                : "status.host-conflict",
+                        "plugin", f.target().pluginName(), "key", f.key(), "value", String.valueOf(f.current()),
+                        "fix", String.valueOf(f.fix()), "id", f.target().id()));
+            }
+        }
+        if (!any) {
+            sender.sendMessage(msg.getMessage("status.hosts-clean",
+                    "checked", findings.isEmpty() ? "none installed" : String.join(", ", findings.keySet())));
+        }
+    }
+
+    /** {@code /pm status}: Bedrock conversion and Floodgate state. */
+    private void sendBedrockStatus(CommandSender sender, MessageManager msg) {
+        boolean floodgate = Bukkit.getPluginManager().getPlugin("floodgate") != null;
+        String java = plugin.getConfigManager().isSkipBedrockPlayers() ? "not sent to Bedrock players"
+                : "sent to Bedrock players too";
+        if (!plugin.getConfigManager().isBedrockEnabled()) {
+            sender.sendMessage(msg.getMessage("status.bedrock-off",
+                    "floodgate", floodgate ? "installed" : "not installed", "java", java));
+            return;
+        }
+        var b = plugin.getLastBedrock();
+        String last = b == null ? "not run yet"
+                : b.items() + " item(s)" + (b.manifestVersion() == null ? "" : ", manifest " + b.manifestVersion())
+                + " at " + clock(b.at()) + " (" + b.detail() + ")";
+        java.io.File geyser = plugin.resolveGeyserFolder();
+        sender.sendMessage(msg.getMessage("status.bedrock-on",
+                "last", last,
+                "geyser", geyser == null ? "not found" : geyser.getPath() + (geyser.isDirectory() ? "" : " (missing)"),
+                "floodgate", floodgate ? "installed" : "not installed", "java", java));
+    }
+
+    // ---- /pm verbose ----------------------------------------------------
+
+    /** {@code /pm verbose} — show whether debug logging is on. */
+    private int handleVerboseShow(CommandContext<CommandSourceStack> ctx) {
+        boolean on = "debug".equalsIgnoreCase(plugin.getConfigManager().getLogLevel());
+        ctx.getSource().getSender().sendMessage(plugin.getMessageManager().getMessage("verbose.state",
+                "state", on ? "on" : "off", "level", plugin.getConfigManager().getLogLevel()));
+        return 1;
+    }
+
+    /** {@code /pm verbose on|off} — set log-level to debug/info and save it to config.yml. */
+    private int handleVerboseSet(CommandContext<CommandSourceStack> ctx, boolean on) {
+        plugin.setVerbose(on);
+        ctx.getSource().getSender().sendMessage(plugin.getMessageManager().getMessage(
+                on ? "verbose.enabled" : "verbose.disabled"));
+        plugin.getPluginLogger().info("Verbose logging " + (on ? "enabled" : "disabled")
+                + " by " + ctx.getSource().getSender().getName() + " (log-level: "
+                + plugin.getConfigManager().getLogLevel() + ")");
+        return 1;
+    }
+
+    // ---- /pm fixup ------------------------------------------------------
+
+    /** {@code /pm fixup} — list what would be changed. */
+    private int handleFixupList(CommandContext<CommandSourceStack> ctx) {
+        CommandSender sender = ctx.getSource().getSender();
+        MessageManager msg = plugin.getMessageManager();
+        Bukkit.getAsyncScheduler().runNow(plugin.getLoader(), t -> {
+            var hosts = plugin.getCompetingHostManager();
+            hosts.scan();
+            boolean any = false;
+            for (var entry : hosts.getFindings().entrySet()) {
+                for (var f : entry.getValue()) {
+                    any = true;
+                    sender.sendMessage(msg.getMessage("fixup.finding", "line", f.describe(), "id", f.target().id()));
+                }
+            }
+            if (!any) sender.sendMessage(msg.getMessage("fixup.none"));
+        });
+        return 1;
+    }
+
+    /** {@code /pm fixup <plugin>} — back up and rewrite the plugin's config. */
+    private int handleFixup(CommandContext<CommandSourceStack> ctx, String id) {
+        CommandSender sender = ctx.getSource().getSender();
+        MessageManager msg = plugin.getMessageManager();
+        var target = sh.pcx.packmerger.integration.CompetingHosts.target(id);
+        if (Bukkit.getPluginManager().getPlugin(target.pluginName()) == null) {
+            sender.sendMessage(msg.getMessage("fixup.not-installed", "plugin", target.pluginName()));
+            return 0;
+        }
+        Bukkit.getAsyncScheduler().runNow(plugin.getLoader(), t -> {
+            try {
+                var r = plugin.getCompetingHostManager().fixup(target);
+                if (!r.changed()) {
+                    sender.sendMessage(msg.getMessage("fixup.nothing", "plugin", target.pluginName(),
+                            "detail", r.message()));
+                    return;
+                }
+                sender.sendMessage(msg.getMessage("fixup.done", "plugin", target.pluginName(),
+                        "file", target.pluginName() + "/" + target.configFile()));
+                r.applied().forEach((k, v) -> sender.sendMessage(msg.getMessage("fixup.change",
+                        "key", k, "value", String.valueOf(v))));
+                sender.sendMessage(msg.getMessage("fixup.backup", "file", r.backup().getName()));
+                sender.sendMessage(msg.getMessage("fixup.next", "reload", target.reloadHint()));
+            } catch (Exception e) {
+                sender.sendMessage(msg.getMessage("fixup.failed", "plugin", target.pluginName(),
+                        "error", String.valueOf(e.getMessage())));
+            }
+        });
+        return 1;
+    }
+
+    /** {@code /pm fixup dismiss} — stop warning about the current findings (persisted). */
+    private int handleFixupDismiss(CommandContext<CommandSourceStack> ctx) {
+        CommandSender sender = ctx.getSource().getSender();
+        MessageManager msg = plugin.getMessageManager();
+        Bukkit.getAsyncScheduler().runNow(plugin.getLoader(), t -> {
+            try {
+                int n = plugin.getCompetingHostManager().dismissAll();
+                sender.sendMessage(msg.getMessage("fixup.dismissed", "count", String.valueOf(n)));
+            } catch (Exception e) {
+                sender.sendMessage(msg.getMessage("fixup.failed", "plugin", "PackMerger",
+                        "error", String.valueOf(e.getMessage())));
+            }
+        });
         return 1;
     }
 

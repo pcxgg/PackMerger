@@ -2,7 +2,6 @@ package sh.pcx.packmerger.discovery;
 
 import io.papermc.paper.threadedregions.scheduler.ScheduledTask;
 import org.bukkit.Bukkit;
-import org.bukkit.configuration.file.YamlConfiguration;
 import sh.pcx.packmerger.PackMergerBootstrap;
 import sh.pcx.packmerger.PluginLogger;
 import sh.pcx.packmerger.config.ConfigManager;
@@ -176,15 +175,8 @@ public class PluginPackManager {
                     + "' (adapter disabled, plugin removed, or its source is gone or invalid)");
         }
 
-        PluginPackStager.Outcome ia = report.outcome("itemsadder");
-        if (ia != null && ia.status() != PluginPackStager.Status.NOT_INSTALLED
-                && ia.status() != PluginPackStager.Status.DISABLED) {
-            String iaAdvice = ItemsAdderCheck.advisory(itemsAdderConflicts());
-            if (iaAdvice != null) {
-                logger.warning("[plugin-packs] " + iaAdvice);
-                notMerged.add(iaAdvice);
-            }
-        }
+        // ItemsAdder zip protection / JSON compression (and its own hosting) are reported
+        // by the competing-host check (/pm status, admin join notice, /pm fixup).
 
         advisory = notMerged.isEmpty() ? null
                 : "PackMerger: pack-generating plugins installed but not merged → " + String.join("; ", notMerged);
@@ -192,13 +184,6 @@ public class PluginPackManager {
 
         scheduleDeferredRetry(report);
         return report.stagedCount();
-    }
-
-    private List<String> itemsAdderConflicts() {
-        File cfgFile = new File(pluginsFolder(), "ItemsAdder/config.yml");
-        if (!cfgFile.isFile()) return List.of();
-        YamlConfiguration ia = YamlConfiguration.loadConfiguration(cfgFile);
-        return ItemsAdderCheck.conflicts(key -> ia.getBoolean(key, false));
     }
 
     /**
@@ -284,6 +269,31 @@ public class PluginPackManager {
      */
     public String getAdvisoryMessageOrNull() {
         return advisory;
+    }
+
+    /**
+     * @return one entry per installed pack-generating plugin from the last pass, as
+     *         {@code "<plugin> (<alias>): <state>"} (empty before the first pass)
+     */
+    public List<String> getIntegrationStates() {
+        PluginPackStager.Report r = lastReport;
+        if (r == null) return List.of();
+        List<String> out = new ArrayList<>();
+        for (PluginPackStager.Outcome o : r.outcomes()) {
+            String state = switch (o.status()) {
+                case STAGED, UNCHANGED, FETCHED -> "merged";
+                case DEFERRED -> "waiting for its pack to finish writing";
+                case DISABLED -> "disabled in config";
+                case NOT_FOUND -> "installed, no generated pack found";
+                case INVALID -> "not a resource pack";
+                case FAILED -> "failed";
+                case NOT_INSTALLED -> null;
+            };
+            if (state == null) continue;
+            String who = o.pluginName() != null ? o.pluginName() + " (" + o.alias() + ")" : o.alias();
+            out.add(who + ": " + state);
+        }
+        return out;
     }
 
     /** @return aliases merged from plugins on the last pass (empty before the first pass) */

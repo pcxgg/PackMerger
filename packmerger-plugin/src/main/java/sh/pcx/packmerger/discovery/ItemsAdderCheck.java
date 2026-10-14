@@ -12,10 +12,13 @@ import java.util.function.Predicate;
 public final class ItemsAdderCheck {
 
     /** Config keys whose {@code true} value breaks merging, with the reason. */
-    static final List<String[]> CONFLICTS = List.of(
+    public static final List<String[]> CONFLICTS = List.of(
             new String[]{"resource-pack.zip.protect-file-from-unzip.protection_1", "zip protection"},
             new String[]{"resource-pack.zip.protect-file-from-unzip.protection_2", "zip protection"},
             new String[]{"resource-pack.zip.protect-file-from-unzip.protection_3", "zip protection"},
+            // Older ItemsAdder releases (documented on the "Can't extract the resourcepack" FAQ).
+            new String[]{"resource-pack.zip.protect-file-from-unzip.enabled", "zip protection"},
+            new String[]{"resource-pack.zip.protect-file-from-unzip.extreme", "zip protection"},
             new String[]{"resource-pack.zip.compress-json-files", "JSON compression"});
 
     private ItemsAdderCheck() {}

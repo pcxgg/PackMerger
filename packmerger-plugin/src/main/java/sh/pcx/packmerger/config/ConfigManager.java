@@ -38,7 +38,7 @@ public class ConfigManager {
      * so {@link #load()} can surface a one-line notice on older configs (we never
      * rewrite the file, since it carries operator comments).
      */
-    private static final int CURRENT_CONFIG_VERSION = 4;
+    private static final int CURRENT_CONFIG_VERSION = 5;
 
     /** Default kick message for {@code distribution.enforce-required}. */
     static final String DEFAULT_KICK_MESSAGE =
@@ -151,6 +151,9 @@ public class ConfigManager {
 
     /** Seconds to wait after the last file change before triggering a hot-reload merge. */
     private int hotReloadDebounceSeconds;
+
+    /** Folders the merged zip is copied into after each merge ({@code merge.output-copy-to}). */
+    private List<String> outputCopyTo = List.of();
 
     // -------------------------------------------------------------------------
     // Upload settings
@@ -395,6 +398,13 @@ public class ConfigManager {
         sizeWarningMb = config.getInt("merge.optimization.size-warning-mb", 100);
         hotReloadEnabled = config.getBoolean("merge.hot-reload.enabled", true);
         hotReloadDebounceSeconds = config.getInt("merge.hot-reload.debounce-seconds", 5);
+        if (config.isList("merge.output-copy-to")) {
+            outputCopyTo = config.getStringList("merge.output-copy-to").stream()
+                    .filter(t -> t != null && !t.isBlank()).toList();
+        } else {
+            String single = config.getString("merge.output-copy-to", "");
+            outputCopyTo = single == null || single.isBlank() ? List.of() : List.of(single);
+        }
         String rawModelPolicy = config.getString("merge.model-policy", ModelPolicy.WHOLE_FILE.configValue());
         ModelPolicy parsedModelPolicy = ModelPolicy.parse(rawModelPolicy);
         if (parsedModelPolicy == null) {
@@ -554,7 +564,7 @@ public class ConfigManager {
         // Update check
         updateCheckEnabled = config.getBoolean("update-check.enabled", true);
         updateCheckUrl = config.getString("update-check.url",
-                "https://raw.githubusercontent.com/PCX-Network/PackMerger/main/versions.json");
+                "https://raw.githubusercontent.com/PCX-Network/PackMerger/master/versions.json");
     }
 
     /**
@@ -716,6 +726,9 @@ public class ConfigManager {
 
     /** @return debounce delay in seconds before a hot-reload merge triggers */
     public int getHotReloadDebounceSeconds() { return hotReloadDebounceSeconds; }
+
+    /** @return folders (absolute, or relative to {@code plugins/}) the merged zip is copied into */
+    public List<String> getOutputCopyTo() { return outputCopyTo; }
 
     // -------------------------------------------------------------------------
     // Getters — Upload
