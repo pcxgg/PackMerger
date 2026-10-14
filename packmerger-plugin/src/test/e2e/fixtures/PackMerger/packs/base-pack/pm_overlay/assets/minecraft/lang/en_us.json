@@ -1,0 +1,4 @@
+{
+  "pmtest.overlay_dir.from_base": "Overlay dir from base",
+  "pmtest.overlay_dir.shared": "Overlay dir shared from base"
+}

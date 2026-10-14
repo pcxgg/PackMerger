@@ -38,3 +38,34 @@ test('dropping a new pack into packs/ hot-reloads the merge and notifies players
   rmSync(HOTFIX, { recursive: true, force: true });
   await expect.poll(async () => (await langKeys())['pmtest.hotfix'], { timeout: 20_000 }).toBe(undefined);
 });
+
+test('editing a file deep inside an unzipped pack folder hot-reloads the merge', async ({ player, cleanup }) => {
+  const nested = `${PLUGIN_DIR}packs/nested-edit-pack`;
+  cleanup(() => rmSync(nested, { recursive: true, force: true }));
+  await player.makeOp();
+
+  const staging = `${RUN_DIR}e2e-staging/nested-edit-pack`;
+  rmSync(staging, { recursive: true, force: true });
+  mkdirSync(`${staging}/assets/minecraft/lang`, { recursive: true });
+  writeFileSync(`${staging}/pack.mcmeta`,
+    JSON.stringify({ pack: { description: 'nested', min_format: 84, max_format: 84 } }));
+  writeFileSync(`${staging}/${LANG}`, JSON.stringify({ 'pmtest.nested': 'v1' }));
+  renameSync(staging, nested);
+  await expect.poll(async () => (await langKeys())['pmtest.nested'], { timeout: 20_000 }).toBe('v1');
+
+  // Only a file three folders below packs/ changes now: the watcher must still notice it.
+  writeFileSync(`${nested}/${LANG}`, JSON.stringify({ 'pmtest.nested': 'v2' }));
+  await expect.poll(async () => (await langKeys())['pmtest.nested'], { timeout: 20_000 }).toBe('v2');
+
+  // A folder created after the pack appeared is watched too.
+  mkdirSync(`${nested}/assets/pmtest/lang`, { recursive: true });
+  await new Promise((r) => setTimeout(r, 1_500));
+  writeFileSync(`${nested}/assets/pmtest/lang/en_us.json`, JSON.stringify({ 'pmtest.nested.deep': 'deep' }));
+  await expect.poll(async () => {
+    const pack = await downloadPack();
+    return pack.entries.has('assets/pmtest/lang/en_us.json');
+  }, { timeout: 20_000 }).toBe(true);
+
+  rmSync(nested, { recursive: true, force: true });
+  await expect.poll(async () => (await langKeys())['pmtest.nested'], { timeout: 20_000 }).toBe(undefined);
+});
