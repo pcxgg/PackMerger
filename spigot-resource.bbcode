@@ -41,7 +41,8 @@ Instead of forcing players to manually install or merge packs, drop your packs i
 [*][B]Per-Server Composition[/B] - Multi-server networks can include/exclude packs per backend.
 [*][B]Hot Reload[/B] - Watches the packs folder and auto-merges on changes with configurable debounce.
 [*][B]Custom Overrides[/B] - Drop a [FONT=Courier New]pack.mcmeta[/FONT] or [FONT=Courier New]pack.png[/FONT] into the packs folder to override the merged metadata/icon.
-[*][B]Plugin API + Bukkit Events[/B] - [FONT=Courier New]PackMergedEvent[/FONT], [FONT=Courier New]PackUploadedEvent[/FONT], [FONT=Courier New]PackValidationFailedEvent[/FONT], and more — other plugins react without log-scraping.
+[*][B]Plugin API + Bukkit Events[/B] - Other plugins add their own pack with [FONT=Courier New]PackMergerApi.registerPack[/FONT] (dropped automatically when they disable) and react to [FONT=Courier New]PackMergedEvent[/FONT], [FONT=Courier New]PackUploadedEvent[/FONT], [FONT=Courier New]PackValidationFailedEvent[/FONT], and more — without log-scraping.
+[*][B]Other Pack Hosts Fixed For You[/B] - Detects ItemsAdder, Oraxen and Nexo hosting or sending their own pack (and ItemsAdder zip protection / JSON compression); [FONT=Courier New]/pm fixup <plugin>[/FONT] backs up their config and writes the fix.
 [*][B]Brigadier Commands[/B] - Full tab completion via Paper's modern command API; all player-facing text is externalized in [FONT=Courier New]messages_en.yml[/FONT].
 [*][B]Lean Jar[/B] - Ships ~360 KB; heavy optional dependencies (the S3 SDK) are downloaded on first enable and verified by SHA-256.
 [/LIST]
@@ -69,7 +70,10 @@ Instead of forcing players to manually install or merge packs, drop your packs i
 
 [SPOILER="Click to view all commands"]• [FONT=Courier New]/pm reload[/FONT] — Reload config, re-init upload provider, re-fetch on-reload remote packs, trigger a merge
 • [FONT=Courier New]/pm validate[/FONT] — Run validation on the current merged pack (JSON, missing refs, orphans, pack_format drift)
-• [FONT=Courier New]/pm status[/FONT] — Server name, provider, last merge time, pack URL, SHA-1, file size, discovered packs
+• [FONT=Courier New]/pm merge[/FONT] — Re-stage plugin packs, merge and upload without reloading the config
+• [FONT=Courier New]/pm status[/FONT] — Provider, hosting route and verification, last upload, pack URL, SHA-1, size, packs, plugin integrations, API packs, other pack hosts, Bedrock state, log level
+• [FONT=Courier New]/pm verbose [on|off][/FONT] — Toggle debug logging at runtime (saved to config)
+• [FONT=Courier New]/pm fixup [itemsadder|oraxen|nexo|dismiss][/FONT] — List, fix (with backup) or dismiss other plugins hosting their own pack
 • [FONT=Courier New]/pm apply [player][/FONT] — Force-send the current pack to all online players or one (supports [FONT=Courier New]@a[/FONT] selectors)
 • [FONT=Courier New]/pm inspect[/FONT] — Summary of the last merge (1.1.0+)
 • [FONT=Courier New]/pm inspect <pack>[/FONT] — Per-pack detail: files won + files contributed but lost on (1.1.0+)
@@ -231,7 +235,7 @@ On a multi-server network, each backend can have its own merged pack by defining
 [*]The cache only updates after the client reports [FONT=Courier New]SUCCESSFULLY_LOADED[/FONT]
 [*]If using [FONT=Courier New]use-add-resource-pack: true[/FONT], Minecraft may cache differently than replace mode
 [*]Delete [FONT=Courier New]plugins/PackMerger/cache/player-cache.json[/FONT] to reset
-[*]Set [FONT=Courier New]log-level: "debug"[/FONT] to see per-player send/skip logs
+[*]Run [FONT=Courier New]/pm verbose on[/FONT] (or set [FONT=Courier New]log-level: "debug"[/FONT]) to see per-player send/skip logs
 [/LIST]
 [/SPOILER]
 

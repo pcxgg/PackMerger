@@ -1,26 +1,29 @@
-// Minimal example of consuming PackMerger's API and Bukkit events from another plugin.
+// Minimal example of using PackMerger's API and Bukkit events from another plugin.
 //
 // Drop this into your plugin's own source tree. It's not compiled as part of PackMerger —
-// the filename is intentionally not named `*.java` inside `src/` so the Java compiler
-// doesn't touch it. It lives here as a copy-paste starting point for integrators.
+// it lives under docs/, outside any source set — as a copy-paste starting point.
 //
-// You'll need PackMerger on your compile classpath. If you're using Gradle:
+// 1. plugin.yml:   depend: [PackMerger]        (or softdepend: [PackMerger])
+// 2. build.gradle: compileOnly files('libs/packmerger-plugin-<version>.jar')
+//                  (or 'com.github.PCX-Network:PackMerger:<version>' via JitPack)
 //
-//   dependencies {
-//       compileOnly 'com.github.PCX-Network:PackMerger:1.2.0'   // via JitPack, or a local jar
-//   }
+// The API types (sh.pcx.packmerger.api.*) are shared with other plugins; everything else
+// in the PackMerger jar is internal and loaded in its own classloader, so only use the API.
 
 package com.example.myplugin;
 
-import org.bukkit.Bukkit;
 import org.bukkit.event.EventHandler;
 import org.bukkit.event.Listener;
 import org.bukkit.plugin.java.JavaPlugin;
-import sh.pcx.packmerger.PackMerger;
 import sh.pcx.packmerger.api.PackMergerApi;
+import sh.pcx.packmerger.api.PackOptions;
 import sh.pcx.packmerger.api.events.PackMergedEvent;
+import sh.pcx.packmerger.api.events.PackMergerCollectPacksEvent;
 import sh.pcx.packmerger.api.events.PackUploadedEvent;
 import sh.pcx.packmerger.api.events.PackValidationFailedEvent;
+
+import java.net.URI;
+import java.nio.file.Path;
 
 public class MyPlugin extends JavaPlugin implements Listener {
 
@@ -28,29 +31,50 @@ public class MyPlugin extends JavaPlugin implements Listener {
 
     @Override
     public void onEnable() {
-        PackMerger pm = (PackMerger) Bukkit.getPluginManager().getPlugin("PackMerger");
-        if (pm == null) {
+        if (getServer().getPluginManager().getPlugin("PackMerger") == null) {
             getLogger().warning("PackMerger not installed — integration disabled");
             return;
         }
-        this.packs = pm.getApi();
+        packs = PackMergerApi.get();
+        getServer().getPluginManager().registerEvents(this, this);
 
-        Bukkit.getPluginManager().registerEvents(this, this);
+        // Contribute our resource pack (a folder or a zip). PackMerger stages it into
+        // packs/.api-packs/myplugin.zip before every merge and merges it with the
+        // server's other packs. Operators place it with "myplugin" in priority:.
+        // It is unregistered automatically when this plugin is disabled.
+        Path pack = getDataFolder().toPath().resolve("resource_pack");
+        packs.registerPack(this, "myplugin", pack);
 
-        // Poll-style query
-        String currentUrl = packs.getCurrentPackUrl();
-        String currentSha1 = packs.getCurrentPackSha1Hex();
-        getLogger().info("Current pack: " + currentUrl + " (sha1=" + currentSha1 + ")");
+        // A folder holding several packs, unioned into one:
+        // packs.registerPack(this, "myplugin-addons", getDataFolder().toPath().resolve("addons"),
+        //         PackOptions.defaults().withCluster(true));
+
+        // Or a pack you publish online (https; downloaded with ETag on startup and /pm reload):
+        // packs.registerPack(this, "myplugin-cdn", URI.create("https://cdn.example.com/pack.zip"));
+
+        getLogger().info("Current pack: " + packs.getCurrentPackUrl()
+                + " (sha1=" + packs.getCurrentPackSha1Hex() + ")");
+    }
+
+    // Rebuilt your pack? Ask for a merge: the registered folder/zip is re-read (and only
+    // copied once it has stopped changing) at the start of every merge.
+    public void onPackRebuilt() {
+        packs.triggerMerge().thenRun(() ->
+                getLogger().info("Merge cycle complete; pack URL is " + packs.getCurrentPackUrl()));
+    }
+
+    // Alternative to registering in onEnable: contribute only when a merge runs.
+    @EventHandler
+    public void onCollect(PackMergerCollectPacksEvent e) {
+        // e.registerPack(this, "myplugin-lazy", buildPackNow());
     }
 
     @EventHandler
     public void onPackMerged(PackMergedEvent e) {
-        // Fired after merge + validate, before upload.
-        int errors = e.getValidationResult().errors();
-        int warnings = e.getValidationResult().warnings();
+        // Fired after merge + validate, before upload (asynchronously).
         getLogger().info("Pack merged: " + e.getOutputFile().getName()
-                + " (" + errors + " errors, " + warnings + " warnings)");
-
+                + " (" + e.getValidationResult().errors() + " errors, "
+                + e.getValidationResult().warnings() + " warnings)");
         // Provenance: who contributed which file?
         e.getProvenance().filesByWinner().forEach((pack, count) ->
                 getLogger().info("  " + pack + ": " + count + " files won"));
@@ -58,25 +82,23 @@ public class MyPlugin extends JavaPlugin implements Listener {
 
     @EventHandler
     public void onPackUploaded(PackUploadedEvent e) {
-        // Fired once the public URL is live. Good time to post to Discord, update
-        // a signboard plugin, etc.
+        // The public URL is live: post it to Discord, update a sign, etc.
         getLogger().info("Pack uploaded: " + e.getUrl());
     }
 
     @EventHandler
     public void onValidationFailed(PackValidationFailedEvent e) {
         if (e.wasRolledBack()) {
-            getLogger().severe("PackMerger rolled back to previous pack due to "
+            getLogger().severe("PackMerger rolled back to the previous pack: "
                     + e.getResult().errors() + " validation errors");
         } else {
-            getLogger().severe("PackMerger shipped a pack with validation errors — no previous pack to roll back to");
+            getLogger().severe("PackMerger shipped a pack with validation errors (nothing to roll back to)");
         }
-        // Page on-call, open incident, notify admins, etc.
     }
 
-    // Triggering a merge programmatically (e.g. from your own command or webhook):
-    public void merge() {
-        packs.triggerMerge().thenRun(() ->
-                getLogger().info("Merge cycle complete; pack URL is " + packs.getCurrentPackUrl()));
+    @Override
+    public void onDisable() {
+        // Not required (PackMerger drops our packs when we are disabled), but explicit is fine:
+        if (packs != null) packs.unregisterPack("myplugin");
     }
 }

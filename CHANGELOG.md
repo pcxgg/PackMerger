@@ -68,6 +68,37 @@ the way the client actually reads them.
   `max_format`, plus `supported_formats` and an in-range `pack_format` when the
   range reaches format 64 or below).
 
+- **Pack registration API**: `PackMergerApi.registerPack(plugin, alias, Path|URI[, PackOptions])`,
+  `unregisterPack(alias)` and `getRegisteredPacks()`. Registered packs are staged
+  into `packs/.api-packs/<alias>.zip` with the same validation, cluster union and
+  stability check as plugin packs, are placed in `priority:` by alias, and are
+  dropped automatically when the owning plugin is disabled. Registering schedules a
+  (coalesced) merge. `PackMergerApi.get()` returns the API (it is also registered
+  with Bukkit's `ServicesManager`).
+- **`PackMergerCollectPacksEvent`**: fired asynchronously at the start of every merge
+  so plugins can contribute packs lazily; packs registered from it are part of that
+  merge.
+- **Other pack hosts**: PackMerger detects ItemsAdder (`resource-pack.hosting.*`),
+  Oraxen (`Pack.upload.enabled`, `Pack.dispatch.send`) and Nexo (`Pack.server.type`)
+  hosting or sending their own pack, plus ItemsAdder unzip protection and
+  `compress-json-files`, and reports them on the console, in `/pm status` and to
+  admins on join with the exact setting to change.
+- **`/pm fixup <itemsadder|oraxen|nexo>`** backs up that plugin's config
+  (`<file>.packmerger-backup-<date>`), writes the fix (keeping comments) and says
+  which reload command to run; **`/pm fixup`** lists the findings and
+  **`/pm fixup dismiss`** hides the current ones (persisted in
+  `dismissed-warnings.yml`).
+- **`/pm verbose [on|off]`** switches debug logging at runtime and saves it as
+  `log-level` (`debug`/`info`).
+- **`merge.output-copy-to`** (default `[]`): folders that get a copy of every
+  merged zip (written via a temp file; folders inside `packs/` are refused).
+- **`/pm status`** also shows the last upload result, each installed
+  pack-generating plugin and its state, API-registered packs, other pack hosts,
+  the Bedrock/Floodgate/Geyser state and the log level.
+- **Bedrock**: Geyser's folder is detected (an installed `Geyser-*` plugin's data
+  folder, then `plugins/Geyser-Spigot`, then `plugins/Geyser-Paper`) instead of
+  assuming `Geyser-Spigot`.
+
 ### Fixed
 - **Returning players got no pack.** The persistent player cache skipped the send on rejoin when the hash matched, but the client drops server packs on disconnect, so those players played without the pack (and `required` was never applied to them). The pack is now sent on every join; the client's own SHA-1 cache still avoids re-downloading an unchanged pack.
 - **Every merge was a "new pack".** Zip entries carried the current time, so identical content produced a different SHA-1 each merge (notify/resend spam, client re-downloads, S3 object churn). Merged and staged plugin zips are now deterministic (sorted entries, fixed timestamps).
@@ -115,6 +146,22 @@ the way the client actually reads them.
   `packs/.remote-cache/` whose alias was removed from `remote-packs` are deleted
   too.
 
+- **The plugin API and events did not work from other plugins.** PackMerger runs its
+  code in an isolated classloader, so other plugins saw different `PackMergerApi`
+  and event classes: the documented `((PackMerger) plugin).getApi()` did not even
+  compile (there is no `PackMerger` class), and listeners for `PackMergedEvent`,
+  `PackUploadedEvent` etc. never fired. The `sh.pcx.packmerger.api` package (and
+  `MergeProvenance`, `PackValidator.ValidationResult` used in its signatures) is now
+  loaded once and shared, and an end-to-end test drives the API from a separate
+  plugin.
+- **Bedrock clients kept stale packs**: the `.mcpack` manifest version was always
+  `1.0.0` with fixed UUIDs, so clients that had it cached did not download updated
+  icons. The version is now derived from the converted content.
+- The default `update-check.url` (used when the key is missing) pointed at a `main`
+  branch that does not exist; it now matches the `master` URL in config.yml.
+- Docs drift: README's logging section described a `debug` key; the documented
+  `PackMerger` class / `getApi()` example is replaced by `PackMergerApi.get()`.
+
 ### Changed
 - **`upload.self-host.port` defaults to `-1` (Minecraft port + 1)** instead of `8080`. Configs that set a port explicitly (the generated config.yml always did, with `8080`) keep that port; only a config without the key moves to Minecraft port + 1. On hosting panels, allocate that port (or set an allocated one).
 - **`public-url` is used as a complete URL** (see Fixed). If you relied on `/pack` being appended to a URL with another path (e.g. `https://example.com/mc` meaning `https://example.com/mc/pack`), write the full URL.
@@ -143,6 +190,13 @@ the way the client actually reads them.
 - The plugin-pack watcher is **on by default**. It only reads file sizes and
   timestamps; set `plugin-packs.watch.enabled: false` to get the old behaviour
   (re-stage only on merge).
+
+- ItemsAdder zip protection / `compress-json-files` moved from the plugin-pack
+  advisory to the new other-pack-host report (console, `/pm status`, admin join
+  notice, `/pm fixup itemsadder`). The older `protect-file-from-unzip.enabled` /
+  `.extreme` keys are detected too.
+- `config-version` is now 5 (new key: `merge.output-copy-to`; no default changed).
+
 
 ## [1.2.0] — 2026-06-18
 
