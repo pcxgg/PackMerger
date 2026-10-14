@@ -4,6 +4,64 @@ All notable changes to PackMerger are documented here. The format is loosely
 based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the
 project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+
+- **13 more plugin-pack integrations**: Nova, BetterHUD, ValhallaMMO, vane-core,
+  BackpackPlus, BetterStructures, CannonRTP, EternalTD, InfiniteVehicles,
+  MegaBlockSurvivors and ResurrectionChest from disk, plus MMOInventory and
+  RealisticSurvival, whose packs are downloaded from the author's published link
+  only while the plugin is installed (opt out with
+  `plugin-packs.sources.<alias>.enabled: false`).
+- **Cluster sources**: a folder holding several packs is unioned into one staged
+  pack (lang/atlas/sounds/model JSON merged, first pack wins other clashes).
+  Folders of packs are detected automatically; `cluster: true` forces it.
+- **Operator-defined adapters**: any alias under `plugin-packs.sources` that is not
+  built in becomes an adapter (`plugin`, `path` (string or list), `cluster`,
+  `enabled`), so new plugins need no release. Built-ins accept the same keys, and
+  `url` for the two download-only plugins.
+- **Plugin pack watcher** (`plugin-packs.watch.enabled`, `interval-seconds`,
+  default on / 5 s): polls the resolved source paths and re-merges when a plugin
+  rebuilds its pack, so `/oraxen reload`-style rebuilds no longer need a `/pm`
+  command.
+- **Stability check** (`plugin-packs.stability.polls` / `interval-millis`, default
+  3 / 1000): a changed source is copied only once its size and mtime hold steady,
+  so half-written zips are never staged; a still-changing source is retried.
+- **`/pm merge`**: re-stages plugin packs, merges and uploads without reloading the
+  config. It was documented before but did not exist.
+- `/pm status` lists the plugin packs merged on the last pass.
+- ItemsAdder zip protection and `compress-json-files` are detected and reported in
+  the admin advisory.
+
+### Fixed
+
+- **EliteMobs and FreeMinecraftModels** are read from their current locations:
+  `EliteMobs/resource_pack` (a folder of packs) and
+  `FreeMinecraftModels/output/FreeMinecraftModels.zip` plus the
+  `FreeMinecraftModels/resource_pack` folder of packs. The old paths stay as
+  fallbacks.
+- **Broken fallbacks removed**: `Nexo/pack/assets`, `ItemsAdder/contents` and
+  `Oraxen/pack` produced packs with nothing usable at the root. Every staged
+  source is now validated (`pack.mcmeta` or `assets/` at the root; a zip wrapped in
+  one folder is unwrapped); a source that fails is skipped, logged, and listed in
+  the admin advisory.
+- **Stale staged packs no longer merge**: disabling an adapter, removing the
+  plugin, or deleting its output now deletes `packs/.plugin-packs/<alias>.zip`;
+  turning `plugin-packs.enabled` off clears the folder. Cached downloads in
+  `packs/.remote-cache/` whose alias was removed from `remote-packs` are deleted
+  too.
+- Messages added in newer versions fall back to the bundled text when an older
+  `messages_en.yml` lacks them.
+
+### Changed
+
+- `config-version` is now 3 (new `plugin-packs.watch`, `plugin-packs.stability`
+  and the extra `plugin-packs.sources` keys; all default safely when missing).
+- The plugin-pack watcher is **on by default**. It only reads file sizes and
+  timestamps; set `plugin-packs.watch.enabled: false` to get the old behaviour
+  (re-stage only on merge).
+
 ## [1.2.0] — 2026-06-18
 
 Brings PackMerger onto the 2026 Minecraft/Paper line, adds automatic discovery of
