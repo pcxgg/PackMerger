@@ -23,14 +23,16 @@ import java.util.concurrent.CompletableFuture;
 public interface PackMergerApi {
 
     /**
-     * @return the public download URL of the current merged pack, or
-     *         {@code null} if no merge has been uploaded yet
+     * @return the public download URL of the pack currently offered to players, or
+     *         {@code null} if nothing has been published yet. Always consistent with
+     *         {@link #getCurrentPackSha1Hex()}: both change together, after an upload
+     *         succeeded.
      */
     String getCurrentPackUrl();
 
     /**
-     * @return the hex-encoded SHA-1 hash of the current merged pack, or
-     *         {@code null} if no merge has completed
+     * @return the hex-encoded SHA-1 hash of the pack currently offered to players,
+     *         or {@code null} if nothing has been published yet
      */
     String getCurrentPackSha1Hex();
 

@@ -8,7 +8,10 @@ import sh.pcx.packmerger.config.ConfigManager;
 
 import java.io.*;
 import java.net.InetSocketAddress;
+import java.nio.file.AtomicMoveNotSupportedException;
+import java.nio.file.FileAlreadyExistsException;
 import java.nio.file.Files;
+import java.nio.file.StandardCopyOption;
 import java.util.Properties;
 import java.util.concurrent.Executors;
 import java.util.concurrent.Semaphore;
@@ -19,8 +22,11 @@ import java.util.concurrent.atomic.AtomicReference;
  *
  * <p>This is the simplest upload option — no external service is needed. The plugin starts
  * an embedded {@link HttpServer} on the configured port and serves the pack file directly
- * at the {@code /pack} endpoint. The "upload" operation simply swaps the file reference
- * atomically so that subsequent HTTP requests serve the new version.</p>
+ * at the {@code /pack} endpoint. The "upload" operation snapshots the merged zip into
+ * {@code output/.self-host/<sha1>.zip} and swaps the served file reference atomically.
+ * Serving a snapshot (instead of the live output path) means a merge that rewrites
+ * {@code output/} never changes the bytes behind an already-advertised SHA-1; the new
+ * pack is only served once it is published.</p>
  *
  * <p>Features:</p>
  * <ul>
@@ -48,6 +54,12 @@ public class SelfHostProvider implements UploadProvider {
 
     /** The embedded HTTP server instance, or {@code null} if not started. */
     private HttpServer server;
+
+    /** Port the HTTP server was bound to (or attempted), used to decide whether a reload can reuse it. */
+    private int boundPort = -1;
+
+    /** Snapshot that was served before the current one; kept for in-flight downloads. */
+    private final AtomicReference<File> previousFile = new AtomicReference<>();
 
     /**
      * Atomic reference to the currently served pack file. Updated on each "upload"
@@ -83,12 +95,8 @@ public class SelfHostProvider implements UploadProvider {
     public void start() {
         ConfigManager config = plugin.getConfigManager();
         int port = config.getSelfHostPort();
-        int rateLimit = config.getSelfHostRateLimit();
-
-        // Initialize rate limiter if a limit is configured (0 = unlimited)
-        if (rateLimit > 0) {
-            rateLimiter = new Semaphore(rateLimit);
-        }
+        boundPort = port;
+        applyRateLimit(config.getSelfHostRateLimit());
 
         try {
             server = HttpServer.create(new InetSocketAddress(port), 0);
@@ -100,6 +108,30 @@ public class SelfHostProvider implements UploadProvider {
         } catch (IOException e) {
             logger.error("Failed to start self-host HTTP server on port " + port + ": " + e.getMessage());
         }
+    }
+
+    /** (Re)creates the download limiter; 0 or less disables it. */
+    private void applyRateLimit(int rateLimit) {
+        rateLimiter = rateLimit > 0 ? new Semaphore(rateLimit) : null;
+    }
+
+    /**
+     * Applies changed settings after {@code /pm reload} without restarting the HTTP
+     * server, so the advertised URL keeps answering throughout the reload.
+     *
+     * @return {@code false} if the server must be restarted instead (port changed or
+     *         it is not running)
+     */
+    public boolean reconfigure() {
+        ConfigManager config = plugin.getConfigManager();
+        if (server == null || config.getSelfHostPort() != boundPort) return false;
+        applyRateLimit(config.getSelfHostRateLimit());
+        return true;
+    }
+
+    /** @return {@code true} if the HTTP server is bound and serving */
+    public boolean isRunning() {
+        return server != null;
     }
 
     /**
@@ -151,8 +183,10 @@ public class SelfHostProvider implements UploadProvider {
             return;
         }
 
-        // Check rate limit before starting the download
-        if (rateLimiter != null && !rateLimiter.tryAcquire()) {
+        // Check rate limit before starting the download. Capture the limiter so a
+        // reconfigure() mid-download releases the permit on the semaphore it came from.
+        Semaphore limiter = rateLimiter;
+        if (limiter != null && !limiter.tryAcquire()) {
             // Too many concurrent downloads — return 429 Too Many Requests
             byte[] msg = "Too many concurrent downloads, try again later".getBytes();
             exchange.sendResponseHeaders(429, msg.length);
@@ -180,8 +214,8 @@ public class SelfHostProvider implements UploadProvider {
             }
         } finally {
             // Always release the rate limiter permit, even if the download was interrupted
-            if (rateLimiter != null) {
-                rateLimiter.release();
+            if (limiter != null) {
+                limiter.release();
             }
             exchange.close();
         }
@@ -190,18 +224,33 @@ public class SelfHostProvider implements UploadProvider {
     /**
      * Makes the given file available for download via the HTTP server.
      *
-     * <p>For self-host, "uploading" simply means swapping the file reference that the
-     * HTTP handler serves. No actual network transfer occurs. The swap is atomic via
-     * {@link AtomicReference#set}.</p>
+     * <p>The file is snapshotted to {@code output/.self-host/<sha1>.zip} (hard link when
+     * possible, otherwise a copy) and the served reference is swapped atomically. The
+     * snapshot served before is kept for downloads already in flight; older ones are
+     * deleted.</p>
      *
      * @param file    the merged pack zip file to serve
-     * @param sha1Hex the SHA-1 hash (not used by self-host, but required by the interface)
+     * @param sha1Hex the SHA-1 hash, used to name the snapshot
      * @return the public download URL for the pack (e.g. {@code http://1.2.3.4:8080/pack})
+     * @throws IOException if the HTTP server is not running (so the URL would be dead)
+     *                     or the snapshot cannot be written
      */
     @Override
     public String upload(File file, String sha1Hex) throws Exception {
-        // Atomically swap the served file reference
-        currentFile.set(file);
+        if (server == null) {
+            throw new IOException("the self-host HTTP server is not running (port " + boundPort
+                    + " could not be bound); refusing to advertise a dead URL");
+        }
+
+        File snapshot = snapshot(file, sha1Hex);
+        File old = currentFile.getAndSet(snapshot);
+        if (old != null && !old.equals(snapshot)) {
+            File older = previousFile.getAndSet(old);
+            if (older != null && !older.equals(snapshot) && !older.equals(old)) {
+                Files.deleteIfExists(older.toPath());
+            }
+        }
+        pruneSnapshots(snapshot.getParentFile());
 
         String publicUrl = plugin.getConfigManager().getSelfHostPublicUrl();
         if (publicUrl == null || publicUrl.isEmpty()) {
@@ -219,6 +268,51 @@ public class SelfHostProvider implements UploadProvider {
         }
 
         return publicUrl;
+    }
+
+    /** Directory holding the served snapshots. */
+    private File snapshotDir() {
+        return new File(plugin.getOutputFolder(), ".self-host");
+    }
+
+    /** Hard-links (or copies) {@code file} to {@code .self-host/<sha1>.zip}, atomically. */
+    private File snapshot(File file, String sha1Hex) throws IOException {
+        File dir = snapshotDir();
+        Files.createDirectories(dir.toPath());
+        File target = new File(dir, sha1Hex + ".zip");
+        if (target.isFile() && target.length() == file.length()) return target;
+
+        File temp = new File(dir, sha1Hex + ".zip.tmp");
+        Files.deleteIfExists(temp.toPath());
+        try {
+            Files.createLink(temp.toPath(), file.toPath());
+        } catch (UnsupportedOperationException | IOException e) {
+            if (e instanceof FileAlreadyExistsException) throw (IOException) e;
+            Files.copy(file.toPath(), temp.toPath(), StandardCopyOption.REPLACE_EXISTING);
+        }
+        try {
+            Files.move(temp.toPath(), target.toPath(), StandardCopyOption.ATOMIC_MOVE,
+                    StandardCopyOption.REPLACE_EXISTING);
+        } catch (AtomicMoveNotSupportedException e) {
+            Files.move(temp.toPath(), target.toPath(), StandardCopyOption.REPLACE_EXISTING);
+        }
+        return target;
+    }
+
+    /** Deletes snapshots that are neither served now nor were served just before. */
+    private void pruneSnapshots(File dir) {
+        File[] files = dir.listFiles();
+        if (files == null) return;
+        File current = currentFile.get();
+        File previous = previousFile.get();
+        for (File f : files) {
+            if (f.equals(current) || f.equals(previous)) continue;
+            try {
+                Files.deleteIfExists(f.toPath());
+            } catch (IOException e) {
+                logger.debug("Could not delete old self-host snapshot " + f.getName() + ": " + e.getMessage());
+            }
+        }
     }
 
     /**

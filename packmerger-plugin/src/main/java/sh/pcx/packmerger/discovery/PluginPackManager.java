@@ -24,7 +24,7 @@ import java.util.zip.ZipOutputStream;
  *
  * <p>{@link #stageAll()} is re-run before every merge so a later
  * {@code /oraxen reload} (or any plugin re-emitting its pack) is picked up by the
- * next {@code /pm merge}. Staged packs flow through the format-aware deep-merge
+ * next {@code /pm reload}. Staged packs flow through the format-aware deep-merge
  * strategies; we never bypass them with whole-file overwrite.</p>
  */
 public class PluginPackManager {
