@@ -25,6 +25,11 @@ jobs:
       - name: Setup Gradle
         uses: gradle/actions/setup-gradle@v6
 
+      - name: Bootstrap pcxgg forks
+        uses: ./.github/actions/bootstrap-forks
+        with:
+          mockbukkit-ref: ''
+
       # `build` runs the test suite before producing the shaded jar, so a
       # tagged release can't ship if tests are red.
       - name: Build shadow JAR

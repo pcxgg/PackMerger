@@ -843,4 +843,4 @@ log-level: "info"
 # doesn't have outbound internet or you don't want the startup HTTP call.
 update-check:
   enabled: true
-  url: "https://raw.githubusercontent.com/PCX-Network/PackMerger/master/versions.json"
+  url: "https://raw.githubusercontent.com/pcxgg/PackMerger/master/versions.json"

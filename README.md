@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="https://raw.githubusercontent.com/PCX-Network/Branding/main/PackMerger/branding/BANNER.png" alt="PackMerger">
+  <img src="https://raw.githubusercontent.com/pcxgg/Branding/main/PackMerger/branding/BANNER.png" alt="PackMerger">
 </p>
 
 <p align="center">
@@ -7,11 +7,11 @@
 </p>
 
 <p align="center">
-  <a href="https://github.com/PCX-Network/PackMerger/actions/workflows/release.yml"><img src="https://github.com/PCX-Network/PackMerger/actions/workflows/release.yml/badge.svg" alt="Release workflow"></a>
+  <a href="https://github.com/pcxgg/PackMerger/actions/workflows/release.yml"><img src="https://github.com/pcxgg/PackMerger/actions/workflows/release.yml/badge.svg" alt="Release workflow"></a>
   <img src="https://img.shields.io/badge/Paper-26.1%2B-blue" alt="Paper 26.1+">
   <img src="https://img.shields.io/badge/Java-25%2B-orange" alt="Java 25+">
-  <a href="https://github.com/PCX-Network/PackMerger/releases/latest"><img src="https://img.shields.io/github/v/release/PCX-Network/PackMerger?color=green&label=latest&include_prereleases" alt="Latest release"></a>
-  <a href="https://github.com/PCX-Network/PackMerger"><img src="https://img.shields.io/github/stars/PCX-Network/PackMerger?style=flat&color=yellow" alt="Stars"></a>
+  <a href="https://github.com/pcxgg/PackMerger/releases/latest"><img src="https://img.shields.io/github/v/release/pcxgg/PackMerger?color=green&label=latest&include_prereleases" alt="Latest release"></a>
+  <a href="https://github.com/pcxgg/PackMerger"><img src="https://img.shields.io/github/stars/pcxgg/PackMerger?style=flat&color=yellow" alt="Stars"></a>
 </p>
 
 A Paper plugin that merges multiple Minecraft resource packs into a single pack, uploads it to a configurable hosting provider, and automatically distributes it to players on join. Designed for servers and networks that need to combine packs from different sources into one seamless download.
@@ -85,8 +85,8 @@ needs Node 22+, and reports land in `packmerger-plugin/build/reports/plugwright/
 classloader, and an empty stand-in named `ItemsAdder` lets the other-pack-host check run. Neither is shipped.
 
 The published plugwright 3.0.0 bots stop at Minecraft 26.1, so the suite runs on the
-[PCX-Network fork of plugwright](https://github.com/PCX-Network/plugwright) (branch `pcx/26.3`,
-version `3.1.0-pcx.1`), whose runner uses the PCX-Network forks of mineflayer, minecraft-protocol
+[pcxgg fork of plugwright](https://github.com/pcxgg/plugwright) (branch `pcx/26.3`,
+version `3.1.0-pcx.1`), whose runner uses the pcxgg forks of mineflayer, minecraft-protocol
 and minecraft-data with 26.3 (protocol 777) support. Neither half is published yet, so check the
 fork out next to this repository (`../plugwright`) and build it once:
 
@@ -107,10 +107,11 @@ environment variables). The fixture packs declare `min_format` 84 / `max_format`
 same suite also runs on 26.1.2 by changing `minecraftVersion` in `packmerger-plugin/build.gradle`.
 
 CI (`.github/workflows/ci.yml`) runs `./gradlew build` only, which does not touch the e2e suite.
-To run the suite in CI, the job must first check out `PCX-Network/plugwright` (`pcx/26.3`) to
-`../plugwright`, build its runner and publish its Gradle plugin to Maven local as above;
-once the fork is published (the Gradle plugin to a Maven repository, the runner to an npm
-registry), point `pluginManagement` and `package.json` at those instead.
+Even so, every Gradle invocation resolves the plugwright Gradle plugin, so each job first runs
+`.github/actions/bootstrap-forks`: it clones `pcxgg/plugwright` at a pinned commit, publishes the
+Gradle plugin to Maven local (JDK 17 toolchain) and caches the result per commit. Bump the
+`plugwright-ref` default in that action after changing the fork. To run the e2e suite in CI, a job
+would additionally have to build the fork's runner next to the checkout as above.
 
 ## Releasing
 

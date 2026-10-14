@@ -1,0 +1,77 @@
+name: Bootstrap pcxgg forks
+description: >-
+  Installs into ~/.m2 the pcxgg forks that the Gradle build resolves from mavenLocal:
+  the plugwright Gradle plugin (io.github.drownek.plugwright:3.1.0-pcx.1, runs the e2e bots on
+  Minecraft 26.3) and, when a ref is given, MockBukkit for Minecraft 26.3
+  (org.mockbukkit.mockbukkit:mockbukkit-v26.3:4.118.0-pcx.1). Neither is published to a public
+  repository, so a clean runner has to build them. Results are cached per fork commit.
+  Run it after the job's own setup-java step: the workflow's JDK is restored when it finishes.
+
+inputs:
+  plugwright-ref:
+    description: Commit of pcxgg/plugwright (branch pcx/26.3) to build
+    required: false
+    default: 2487275a3a2023190b825626107aa4570f35f276
+  mockbukkit-ref:
+    description: Commit of pcxgg/MockBukkit (branch minecraft/v26.3) to build; empty skips it
+    required: false
+    default: ''
+
+runs:
+  using: composite
+  steps:
+    - name: Remember the workflow's JDK
+      shell: bash
+      run: |
+        echo "BOOTSTRAP_JAVA_HOME=$JAVA_HOME" >> "$GITHUB_ENV"
+
+    - name: Restore fork artifacts
+      id: cache
+      uses: actions/cache@v4
+      with:
+        path: |
+          ~/.m2/repository/io/github/drownek
+          ~/.m2/repository/org/mockbukkit
+        key: pcx-forks-${{ runner.os }}-plugwright-${{ inputs.plugwright-ref }}-mockbukkit-${{ inputs.mockbukkit-ref || 'none' }}
+
+    # The plugwright Gradle plugin builds with a Java 17 toolchain (Gradle 8.13 wrapper), so
+    # a JDK 17 has to be installed for Gradle's toolchain detection to find.
+    - name: Set up JDK 17 for the plugwright toolchain
+      if: steps.cache.outputs.cache-hit != 'true'
+      uses: actions/setup-java@v5
+      with:
+        distribution: temurin
+        java-version: 17
+
+    - name: Publish the plugwright Gradle plugin to mavenLocal
+      if: steps.cache.outputs.cache-hit != 'true'
+      shell: bash
+      run: |
+        set -euo pipefail
+        dir="$RUNNER_TEMP/pcx-forks/plugwright"
+        git clone --quiet --filter=blob:none https://github.com/pcxgg/plugwright "$dir"
+        git -C "$dir" checkout --quiet "${{ inputs.plugwright-ref }}"
+        cd "$dir/gradle-plugin"
+        ./gradlew --no-daemon --quiet publishToMavenLocal
+        ls ~/.m2/repository/io/github/drownek/plugwright
+
+    # MockBukkit compiles against paper-api 26.3, which needs the workflow's JDK 25.
+    - name: Publish MockBukkit 26.3 to mavenLocal
+      if: steps.cache.outputs.cache-hit != 'true' && inputs.mockbukkit-ref != ''
+      shell: bash
+      env:
+        JAVA_HOME: ${{ env.BOOTSTRAP_JAVA_HOME }}
+      run: |
+        set -euo pipefail
+        dir="$RUNNER_TEMP/pcx-forks/MockBukkit"
+        git clone --quiet --filter=blob:none https://github.com/pcxgg/MockBukkit "$dir"
+        git -C "$dir" checkout --quiet "${{ inputs.mockbukkit-ref }}"
+        cd "$dir"
+        ./gradlew --no-daemon --quiet publishToMavenLocal
+        ls ~/.m2/repository/org/mockbukkit/mockbukkit/mockbukkit-v26.3
+
+    - name: Restore the workflow's JDK
+      shell: bash
+      run: |
+        echo "JAVA_HOME=$BOOTSTRAP_JAVA_HOME" >> "$GITHUB_ENV"
+        echo "$BOOTSTRAP_JAVA_HOME/bin" >> "$GITHUB_PATH"

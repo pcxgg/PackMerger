@@ -25,6 +25,11 @@ jobs:
       - name: Setup Gradle
         uses: gradle/actions/setup-gradle@v6
 
+      - name: Bootstrap pcxgg forks
+        uses: ./.github/actions/bootstrap-forks
+        with:
+          mockbukkit-ref: ''
+
       # `build` runs the full JUnit suite (via check) and produces the shaded
       # jar — the same artifact the release workflow ships. Until now nothing
       # ran the tests in CI; this is the gate.

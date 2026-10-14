@@ -186,7 +186,7 @@ plugwright {
     environments { envs ->
         envs.create('local', me.drownek.plugwright.local.LocalMode.INSTANCE) { spec ->
             // Paper 26.3 (protocol 777). The published mineflayer stack stops at 26.1; the
-            // PCX-Network plugwright fork (3.1.0-pcx.1) runs the bots on the 26.3-capable
+            // pcxgg plugwright fork (3.1.0-pcx.1) runs the bots on the 26.3-capable
             // forks of mineflayer / minecraft-protocol / minecraft-data.
             spec.minecraftVersion.set('26.3')
             spec.acceptEula.set(true)

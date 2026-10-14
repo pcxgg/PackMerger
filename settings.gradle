@@ -1,4 +1,4 @@
-// plugwright 3.1.0-pcx.1 (the PCX-Network fork that runs the e2e bots on Minecraft 26.3) is
+// plugwright 3.1.0-pcx.1 (the pcxgg fork that runs the e2e bots on Minecraft 26.3) is
 // not on the Gradle Plugin Portal: publish it with
 // `cd ../plugwright/gradle-plugin && ./gradlew publishToMavenLocal` (see README, E2E tests).
 pluginManagement {

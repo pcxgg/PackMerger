@@ -5,7 +5,7 @@
 //
 // 1. plugin.yml:   depend: [PackMerger]        (or softdepend: [PackMerger])
 // 2. build.gradle: compileOnly files('libs/packmerger-plugin-<version>.jar')
-//                  (or 'com.github.PCX-Network:PackMerger:<version>' via JitPack)
+//                  (or 'com.github.pcxgg:PackMerger:<version>' via JitPack)
 //
 // The API types (sh.pcx.packmerger.api.*) are shared with other plugins; everything else
 // in the PackMerger jar is internal and loaded in its own classloader, so only use the API.

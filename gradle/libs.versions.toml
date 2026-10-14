@@ -19,7 +19,7 @@ bstats = "3.2.1"
 velocity = "3.4.0"
 bungeecord = "1.21-R0.4"
 shadow = "9.4.2"
-# PCX-Network fork of plugwright (bots on Minecraft 26.2/26.3); resolved from mavenLocal,
+# pcxgg fork of plugwright (bots on Minecraft 26.2/26.3); resolved from mavenLocal,
 # see settings.gradle.
 plugwright = "3.1.0-pcx.1"
 

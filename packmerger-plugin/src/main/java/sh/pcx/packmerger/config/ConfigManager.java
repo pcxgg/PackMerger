@@ -573,7 +573,7 @@ public class ConfigManager {
         // Update check
         updateCheckEnabled = config.getBoolean("update-check.enabled", true);
         updateCheckUrl = config.getString("update-check.url",
-                "https://raw.githubusercontent.com/PCX-Network/PackMerger/master/versions.json");
+                "https://raw.githubusercontent.com/pcxgg/PackMerger/master/versions.json");
     }
 
     /**

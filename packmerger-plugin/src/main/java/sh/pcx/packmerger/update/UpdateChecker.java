@@ -35,7 +35,7 @@ public class UpdateChecker {
 
     /** Default manifest location in the PackMerger repo's default branch. */
     public static final String DEFAULT_URL =
-            "https://raw.githubusercontent.com/PCX-Network/PackMerger/master/versions.json";
+            "https://raw.githubusercontent.com/pcxgg/PackMerger/master/versions.json";
 
     private final PackMergerBootstrap plugin;
     private final PluginLogger logger;

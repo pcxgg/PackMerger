@@ -117,7 +117,7 @@ public record ProxySettings(PackInfo staticPack, boolean required, String prompt
             StringBuilder missing = new StringBuilder();
             if (!Files.exists(file)) {
                 missing.append("# PackMerger proxy plugin (Velocity / BungeeCord).\n")
-                        .append("# Docs: https://github.com/PCX-Network/PackMerger#proxy-velocity--bungeecord\n");
+                        .append("# Docs: https://github.com/pcxgg/PackMerger#proxy-velocity--bungeecord\n");
             }
             for (Map.Entry<String, String[]> e : KEYS.entrySet()) {
                 if (props.containsKey(e.getKey())) continue;
