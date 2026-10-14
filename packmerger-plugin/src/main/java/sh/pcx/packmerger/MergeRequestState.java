@@ -22,16 +22,14 @@ final class MergeRequestState {
         requested.set(false);
     }
 
-    /** A merge was attempted but another one holds the lock; that one covers startup. */
+    /**
+     * A merge was attempted but another one holds the lock: that one covers startup, and a
+     * follow-up merge is owed (the running one may already have passed its takeDeferred()).
+     */
     void mergeBlockedByRunning() {
-        if (startupPending) {
-            startupPending = false;
-            requested.set(true);
-        }
+        startupPending = false;
+        requested.set(true);
     }
-
-    /** A request fired while a merge was running. */
-    void deferRequest() { requested.set(true); }
 
     /** @return {@code true} (once) if a deferred request must run now */
     boolean takeDeferred() { return requested.getAndSet(false); }

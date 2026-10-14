@@ -442,20 +442,6 @@ class PluginPackStagerTest {
         assertTrue(r.outcome("realisticsurvival").advisory());
     }
 
-    // ---------------------------------------------------------------- ItemsAdder
-
-    @Test
-    void itemsAdderProtectionAndJsonCompressionAreDetected() {
-        Map<String, Boolean> cfg = Map.of(
-                "resource-pack.zip.protect-file-from-unzip.protection_2", true,
-                "resource-pack.zip.compress-json-files", true);
-        List<String> conflicts = ItemsAdderCheck.conflicts(k -> cfg.getOrDefault(k, false));
-        assertEquals(List.of("resource-pack.zip.protect-file-from-unzip.protection_2",
-                "resource-pack.zip.compress-json-files"), conflicts);
-        assertTrue(ItemsAdderCheck.advisory(conflicts).contains("/iazip"));
-        assertNull(ItemsAdderCheck.advisory(ItemsAdderCheck.conflicts(k -> false)));
-    }
-
     private static PluginPackAdapter builtIn(String alias) {
         return PluginPackAdapter.builtIns().stream().filter(a -> a.alias().equals(alias)).findFirst().orElseThrow();
     }

@@ -6,6 +6,7 @@ import org.bukkit.event.EventHandler;
 import org.bukkit.event.EventPriority;
 import org.bukkit.event.Listener;
 import org.bukkit.event.player.PlayerJoinEvent;
+import org.bukkit.event.player.PlayerQuitEvent;
 import org.bukkit.event.player.PlayerRegisterChannelEvent;
 import org.bukkit.plugin.messaging.PluginMessageListener;
 import sh.pcx.packmerger.PackMergerBootstrap;
@@ -44,6 +45,7 @@ public final class ProxyLink implements PluginMessageListener, Listener {
     private final ProxyRelayState relay = new ProxyRelayState();
     private final AtomicBoolean warnedNoListener = new AtomicBoolean();
     private final AtomicBoolean warnedDoubleOffer = new AtomicBoolean();
+    private final RejectionLimiter rejections = new RejectionLimiter();
 
     public ProxyLink(PackMergerBootstrap plugin) {
         this.plugin = plugin;
@@ -64,6 +66,7 @@ public final class ProxyLink implements PluginMessageListener, Listener {
         relay.reset();
         warnedNoListener.set(false);
         warnedDoubleOffer.set(false);
+        rejections.clear();
         checkConfiguration();
     }
 
@@ -159,6 +162,20 @@ public final class ProxyLink implements PluginMessageListener, Listener {
         }
     }
 
+    @EventHandler
+    public void onQuit(PlayerQuitEvent event) {
+        rejections.forget(event.getPlayer().getUniqueId());
+    }
+
+    /** Warns on a player's first rejected message of the session; later ones are debug only. */
+    private void logRejection(Player player, String text) {
+        if (rejections.shouldWarn(player.getUniqueId())) {
+            logger.warning("[proxy] " + text + " (further rejections from this player are logged at debug level)");
+        } else {
+            logger.debug("[proxy] " + text);
+        }
+    }
+
     /** OFFER messages from a BungeeCord proxy (anything else on the channel is ignored). */
     @Override
     public void onPluginMessageReceived(String channel, Player player, byte[] message) {
@@ -168,12 +185,12 @@ public final class ProxyLink implements PluginMessageListener, Listener {
         try {
             decoded = PackMessaging.decode(message, config.getProxySecret());
         } catch (IllegalArgumentException e) {
-            logger.warning("[proxy] ignored a malformed pack message via " + player.getName() + " (" + e.getMessage() + ")");
+            logRejection(player, "ignored a malformed pack message via " + player.getName() + " (" + e.getMessage() + ")");
             return;
         }
         String reason = ProxyOfferCheck.rejectReason(decoded, config.getProxySecret() != null, player.getUniqueId());
         if (reason != null) {
-            logger.warning("[proxy] rejected a pack offer via " + player.getName() + ": " + reason);
+            logRejection(player, "rejected a pack offer via " + player.getName() + ": " + reason);
             return;
         }
         PackMessage offer = decoded.message();

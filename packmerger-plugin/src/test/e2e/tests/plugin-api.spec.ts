@@ -1,5 +1,6 @@
 import { expect, sleep, test } from '@plugwright/runner';
-import { consoleCommand, downloadPack, serverLogMark } from './support/pack.js';
+import { readFileSync, writeFileSync } from 'node:fs';
+import { PLUGIN_DIR, consoleCommand, downloadPack, entryText, serverLogMark } from './support/pack.js';
 
 // The public API used the way a third-party plugin uses it: PmApiTest (built from
 // src/e2ePlugin, staged into plugins/) depends on PackMerger, looks the API up with
@@ -67,6 +68,51 @@ test('a plugin contributes a pack lazily from PackMergerCollectPacksEvent', asyn
   // Registered during the event, merged by that same merge (no second merge needed).
   await expect(server).toHaveReceivedMessage("[api-packs] staged 'api-lazy' from PmApiTest", { since: mark });
   await expect.poll(async () => (await entries()).includes(LAZY_MARKER), { timeout: 20_000 }).toBe(true);
+});
+
+// pmtest/marker.txt exists in overlay-pack ("overlay"), base-pack ("base") and the api-test
+// fixture ("api"), so its winner shows where the API pack sits in the priority list.
+test('an API-registered pack listed in priority: wins or loses by its position', async ({ server, cleanup }) => {
+  const config = `${PLUGIN_DIR}config.yml`;
+  const original = readFileSync(config, 'utf8');
+  cleanup(async () => {
+    writeFileSync(config, original);
+    await consoleCommand(server, 'pm reload');
+    await consoleCommand(server, 'pmapitest unregister');
+    await sleep(3_000);
+  });
+  const marker = async () => {
+    const pack = await downloadPack();
+    return pack.status === 200 && pack.entries.has(API_MARKER) ? entryText(pack, 'assets/pmtest/marker.txt').trim() : '';
+  };
+  const setPriority = async (order: string[]) => {
+    const list = order.map(p => `  - "${p}"\n`).join('');
+    const updated = original.replace(/^priority:\n(?:  - .*\n)+/m, `priority:\n${list}`);
+    expect(updated).not.toBe(original);
+    const mark = serverLogMark(server);
+    writeFileSync(config, updated);
+    await consoleCommand(server, 'pm reload');
+    await expect(server).toHaveReceivedMessage(
+      `Merge order (highest priority first): [${order.join(', ')}]`, { since: mark, timeout: 20_000 });
+  };
+
+  expect(await consoleCommand(server, 'pmapitest register')).toContain('registered api-test');
+  // Not listed: merged at the lowest priority, so overlay-pack keeps the colliding file.
+  await expect.poll(marker, { timeout: 20_000 }).toBe('overlay');
+
+  // Listed below both packs: still loses.
+  await setPriority(['overlay-pack', 'base-pack', 'api-test']);
+  await expect.poll(marker, { timeout: 20_000 }).toBe('overlay');
+
+  // Listed first: wins the collision.
+  await setPriority(['api-test', 'overlay-pack', 'base-pack']);
+  await expect.poll(marker, { timeout: 20_000 }).toBe('api');
+
+  // Between two packs: beats the one below it, loses to the one above.
+  await setPriority(['base-pack', 'api-test', 'overlay-pack']);
+  await expect.poll(marker, { timeout: 20_000 }).toBe('base');
+  await setPriority(['overlay-pack', 'api-test', 'base-pack']);
+  await expect.poll(marker, { timeout: 20_000 }).toBe('overlay');
 });
 
 // Last in this file: it leaves PmApiTest disabled for the rest of the run.

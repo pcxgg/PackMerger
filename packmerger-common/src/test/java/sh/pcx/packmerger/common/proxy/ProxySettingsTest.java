@@ -19,6 +19,20 @@ class ProxySettingsTest {
     Path dir;
 
     @Test
+    void toString_redactsTheSecret() throws IOException {
+        Files.writeString(dir.resolve(ProxySettings.FILE_NAME), "secret=hunter2-${PM_S}\nurl=http://x/p\n");
+        ProxySettings withSecret = ProxySettings.load(dir, w -> { }, Map.of("PM_S", "topsecret")::get);
+        String text = withSecret.toString();
+        assertTrue(text.contains("secret=<set>"), text);
+        assertFalse(text.contains("hunter2"), text);
+        assertFalse(text.contains("topsecret"), text);
+        assertTrue(text.contains("http://x/p"), text);
+
+        Path other = dir.resolve("none");
+        assertTrue(ProxySettings.load(other, w -> { }, Map.<String, String>of()::get).toString().contains("secret=<none>"));
+    }
+
+    @Test
     void missingFile_isCreatedWithCommentedDefaults() throws IOException {
         List<String> warnings = new ArrayList<>();
         ProxySettings s = ProxySettings.load(dir, warnings::add, Map.<String, String>of()::get);

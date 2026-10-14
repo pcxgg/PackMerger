@@ -699,11 +699,8 @@ public class PackMergerBootstrap implements PackMergerApi {
         logger.debug("Merge requested: " + reason);
         Bukkit.getAsyncScheduler().runDelayed(loader, t -> {
             mergeScheduled.set(false);
-            if (merging.get()) {
-                mergeState.deferRequest();
-            } else {
-                mergeAndUpload(null);
-            }
+            // If a merge holds the lock, mergeAndUpload() records the request as deferred.
+            mergeAndUpload(null);
         }, 1, TimeUnit.SECONDS);
     }
 

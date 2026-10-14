@@ -27,16 +27,31 @@ class MergeRequestStateTest {
     }
 
     @Test
-    void blockedMergeAfterStartupOwesNothing() {
+    void blockedMergeAlwaysOwesAFollowUp() {
         MergeRequestState s = new MergeRequestState();
         s.mergeBlockedByRunning();
+        assertTrue(s.takeDeferred());
+        assertFalse(s.takeDeferred());
+    }
+
+    @Test
+    void requestBlockedWhileTheRunningMergeIsFinishingIsNotLost() {
+        MergeRequestState s = new MergeRequestState();
+        s.mergeStarted();
+        // The delayed task's attempt loses the lock race (the running merge has not released it yet,
+        // which happens before its finally block calls takeDeferred())...
+        s.mergeBlockedByRunning();
+        // ...so the finally block sees the request and runs it.
+        assertTrue(s.takeDeferred());
+        // A merge that starts afterwards owes nothing.
+        s.mergeStarted();
         assertFalse(s.takeDeferred());
     }
 
     @Test
     void requestDuringMergeIsRunOnce() {
         MergeRequestState s = new MergeRequestState();
-        s.deferRequest();
+        s.mergeBlockedByRunning();
         assertTrue(s.takeDeferred());
         assertFalse(s.takeDeferred());
     }

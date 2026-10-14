@@ -156,6 +156,14 @@ public record ProxySettings(PackInfo staticPack, boolean required, String prompt
                 Boolean.parseBoolean(props.getProperty("resend-on-update", "true").trim()));
     }
 
+    /** Redacts the secret: records print every component by default. */
+    @Override
+    public String toString() {
+        return "ProxySettings[staticPack=" + staticPack + ", required=" + required + ", prompt=" + prompt
+                + ", secret=" + (secret != null || (secretRaw != null && !secretRaw.isEmpty()) ? "<set>" : "<none>") + ", mode=" + mode
+                + ", acceptFrom=" + acceptFrom + ", resendOnUpdate=" + resendOnUpdate + "]";
+    }
+
     public boolean hasSecret() {
         return secret != null;
     }

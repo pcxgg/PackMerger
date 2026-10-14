@@ -1,7 +1,5 @@
 package sh.pcx.packmerger.integration;
 
-import sh.pcx.packmerger.discovery.ItemsAdderCheck;
-
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -33,6 +31,16 @@ import java.util.Map;
  * produces a warning.</p>
  */
 public final class CompetingHosts {
+
+    /** ItemsAdder config keys whose {@code true} value breaks merging, with the reason. */
+    private static final List<String[]> ITEMSADDER_CONFLICTS = List.of(
+            new String[]{"resource-pack.zip.protect-file-from-unzip.protection_1", "zip protection"},
+            new String[]{"resource-pack.zip.protect-file-from-unzip.protection_2", "zip protection"},
+            new String[]{"resource-pack.zip.protect-file-from-unzip.protection_3", "zip protection"},
+            // Older ItemsAdder releases (documented on the "Can't extract the resourcepack" FAQ).
+            new String[]{"resource-pack.zip.protect-file-from-unzip.enabled", "zip protection"},
+            new String[]{"resource-pack.zip.protect-file-from-unzip.extreme", "zip protection"},
+            new String[]{"resource-pack.zip.compress-json-files", "JSON compression"});
 
     private CompetingHosts() {}
 
@@ -90,7 +98,7 @@ public final class CompetingHosts {
                 case ZIP_PROTECTION -> "its zip is protected against unzipping, so PackMerger can't read it";
                 case JSON_COMPRESSION -> "compressed JSON can't be merged reliably";
             };
-            return target.pluginName() + " " + key + ": " + current + " (" + why + "; set it to " + fix + ")";
+            return target.pluginName() + " " + key + ": " + current + " (" + why + "; " + (fix instanceof String str && str.isEmpty() ? "clear it" : "set it to " + fix) + ")";
         }
     }
 
@@ -109,7 +117,15 @@ public final class CompetingHosts {
                     String key = "resource-pack.hosting." + method + ".enabled";
                     if (isTrue(cfg.get(key))) out.add(new Finding(target, Kind.HOSTING, key, true, false));
                 }
-                for (String[] c : ItemsAdderCheck.CONFLICTS) {
+                // A configured external-host URL means a pack is served from there, even if the
+                // enabled flag is off. Placeholder values (example.com) are ignored.
+                String urlKey = "resource-pack.hosting.external-host.url";
+                Object url = cfg.get(urlKey);
+                if (url != null && !String.valueOf(url).isBlank()
+                        && !String.valueOf(url).toLowerCase(Locale.ROOT).contains("example.com")) {
+                    out.add(new Finding(target, Kind.HOSTING, urlKey, url, ""));
+                }
+                for (String[] c : ITEMSADDER_CONFLICTS) {
                     if (!isTrue(cfg.get(c[0]))) continue;
                     Kind kind = c[0].endsWith("compress-json-files") ? Kind.JSON_COMPRESSION : Kind.ZIP_PROTECTION;
                     out.add(new Finding(target, kind, c[0], true, false));

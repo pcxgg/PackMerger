@@ -537,6 +537,11 @@ That means:
   `distribution.enabled: false` there). The proxy asks once per pack and session: a
   player whose backend has no PackMerger gets the pack only after the next update or
   login on a backend that has it.
+- `ip_forward: true` (UUID forwarding) must be set in BungeeCord's `config.yml` and the
+  backends must accept it (`bungeecord: true` in `spigot.yml`/Paper's proxy settings), so
+  the backend sees the proxy's player UUID. Offers are for one player's UUID; without
+  forwarding the UUIDs differ and the backend rejects them with "the offer is for another
+  player".
 
 `config.properties` (created with comments on first start; keys added in a later version
 are appended to an existing file):
@@ -714,7 +719,7 @@ value is whatever the highest-priority `pack.mcmeta` says.
 
 - Players get two copies: the backends still send their own pack. Set `distribution.enabled: false` on the backends when the proxy distributes it.
 - The proxy offers an old pack: check the proxy log for `ignored a pack message from <server>: ...`. `bad signature` means the secrets differ; `not listed in accept-from` means that backend isn't allowed to publish. On the backend, `/pm status` shows `Proxy link: ...`; `update pending until a player joins` means nobody was online yet, and a `does not listen on packmerger:pack` warning means the proxy plugin isn't installed.
-- BungeeCord: nobody gets the pack from the proxy. Set the secret on both sides (the proxy logs a severe message without one) and install PackMerger on the backends.
+- BungeeCord: nobody gets the pack from the proxy. Set the secret on both sides (the proxy logs a severe message without one), install PackMerger on the backends, and set `ip_forward: true` in BungeeCord's `config.yml`; without UUID forwarding the backend logs `rejected a pack offer ...: the offer is for another player`.
 
 ### Pack too large / download timeouts
 

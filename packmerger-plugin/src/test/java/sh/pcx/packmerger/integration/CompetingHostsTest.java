@@ -56,6 +56,27 @@ class CompetingHostsTest {
     }
 
     @Test
+    void itemsAdderExternalHostUrlCountsEvenWhenDisabled() {
+        Map<String, Object> cfg = new HashMap<>();
+        cfg.put("resource-pack.hosting.external-host.enabled", false);
+        cfg.put("resource-pack.hosting.external-host.url", "https://cdn.mine.net/pack.zip");
+        List<CompetingHosts.Finding> f = detect("itemsadder", cfg);
+        assertEquals(List.of("resource-pack.hosting.external-host.url"), keys(f));
+        assertEquals(CompetingHosts.Kind.HOSTING, f.get(0).kind());
+        assertTrue(f.get(0).describe().contains("clear it"), f.get(0).describe());
+        Map<String, Object> fixes = CompetingHosts.fixes(f);
+        assertEquals("", fixes.get("resource-pack.hosting.external-host.url"));
+        assertEquals(true, fixes.get("resource-pack.hosting.no-host.enabled"));
+    }
+
+    @Test
+    void itemsAdderExternalHostUrlPlaceholdersAndBlanksAreIgnored() {
+        for (String url : new String[]{"", "   ", "https://example.com/pack.zip", "HTTP://EXAMPLE.COM/x"}) {
+            assertEquals(List.of(), detect("itemsadder", Map.of("resource-pack.hosting.external-host.url", url)), url);
+        }
+    }
+
+    @Test
     void itemsAdderNoHostIsClean() {
         assertEquals(List.of(), detect("itemsadder", Map.of("resource-pack.hosting.no-host.enabled", true,
                 "resource-pack.hosting.self-host.enabled", false)));
