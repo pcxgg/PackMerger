@@ -146,6 +146,12 @@ def e2ePort = (findProperty('e2ePort') ?: '25567') as int
 def e2eRconPort = (findProperty('e2eRconPort') ?: '25577') as int
 def e2eHttpPort = (findProperty('e2eHttpPort') ?: '28567') as int
 def e2eFixtures = file('src/test/e2e/fixtures')
+// distribution.spec's first test joins a bot before the startup merge, which the fixture
+// delays by 15 s (plugin-packs.merge-delay-seconds). Filtered runs that don't include that
+// spec merge immediately instead, so they don't wait for a pack.
+def e2eTestFiles = findProperty('testFiles')?.toString()
+def e2eTestNames = findProperty('testNames')?.toString()
+def e2eMergeDelay = (e2eTestNames == null && (e2eTestFiles == null || e2eTestFiles.contains('distribution'))) ? 15 : 0
 plugwright {
     testsDir.set(file('src/test/e2e'))
     environments { envs ->
@@ -163,7 +169,9 @@ plugwright {
                     if (!details.directory) {
                         if (details.relativePath.pathString == 'PackMerger/config.yml') {
                             files.file("plugins/PackMerger/config.yml",
-                                details.file.getText('UTF-8').replace('port: 28567', "port: ${e2eHttpPort}"))
+                                details.file.getText('UTF-8')
+                                    .replace('port: 28567', "port: ${e2eHttpPort}")
+                                    .replace('merge-delay-seconds: 15', "merge-delay-seconds: ${e2eMergeDelay}"))
                         } else {
                             files.file("plugins/${details.relativePath.pathString}", details.file)
                         }
