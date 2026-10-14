@@ -3,8 +3,9 @@
 // Modules:
 //   :packmerger-plugin    — the Paper plugin (shipped jar)
 //   :packmerger-velocity  — the Velocity proxy plugin (shipped jar)
+//   :packmerger-bungee    — the BungeeCord proxy plugin (shipped jar)
 //   :packmerger-bedrock   — Java→Bedrock converter (library, shaded into the plugin)
-//   :packmerger-common    — shared backend↔proxy contract (library, shaded)
+//   :packmerger-common    — shared backend↔proxy contract + proxy core (library, shaded)
 //
 // Dependency versions live in the shared catalog at gradle/libs.versions.toml,
 // which is available to every module.

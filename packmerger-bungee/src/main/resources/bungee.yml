@@ -1,0 +1,5 @@
+name: PackMerger
+main: sh.pcx.packmerger.bungee.PackMergerBungee
+version: ${version}
+author: PCX Network
+description: Network-wide resource pack distribution for PackMerger

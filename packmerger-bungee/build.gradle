@@ -1,0 +1,47 @@
+plugins {
+    id 'java'
+    alias(libs.plugins.shadow)
+}
+
+// group + version come from the root build.gradle.
+// The proxy jar takes the module name: packmerger-bungee-<version>.jar.
+
+java {
+    toolchain {
+        languageVersion = JavaLanguageVersion.of(25)
+    }
+}
+
+repositories {
+    mavenCentral()
+}
+
+dependencies {
+    compileOnly(libs.bungeecord.api) {
+        // Only on libraries.minecraft.net and not needed to compile against the API.
+        exclude group: 'com.mojang', module: 'brigadier'
+    }
+    implementation project(':packmerger-common')   // shaded into the proxy jar
+}
+
+processResources {
+    def projectVersion = project.version.toString()
+    inputs.property('version', projectVersion)
+    filesMatching('bungee.yml') {
+        expand version: projectVersion
+    }
+}
+
+tasks.named('shadowJar') {
+    archiveClassifier.set('')
+}
+
+tasks.named('build') {
+    dependsOn tasks.named('shadowJar')
+}
+
+tasks.withType(JavaCompile).configureEach {
+    options.encoding = 'UTF-8'
+    // BungeeCord still runs on Java 17 in many networks.
+    options.release = 17
+}

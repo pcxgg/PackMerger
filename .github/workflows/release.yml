@@ -62,5 +62,6 @@ jobs:
           files: |
             packmerger-plugin/build/libs/packmerger-plugin-${{ steps.version.outputs.version }}.jar
             packmerger-velocity/build/libs/packmerger-velocity-${{ steps.version.outputs.version }}.jar
+            packmerger-bungee/build/libs/packmerger-bungee-${{ steps.version.outputs.version }}.jar
           body_path: .release-notes.md
           make_latest: 'true'

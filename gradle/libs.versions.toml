@@ -14,12 +14,14 @@ gson = "2.14.0"
 junit = "6.1.0"
 bstats = "3.2.1"
 velocity = "3.4.0"
+bungeecord = "1.21-R0.4"
 shadow = "9.4.2"
 plugwright = "3.0.0"
 
 [libraries]
 paper-api = { module = "io.papermc.paper:paper-api", version.ref = "paper" }
 velocity-api = { module = "com.velocitypowered:velocity-api", version.ref = "velocity" }
+bungeecord-api = { module = "net.md-5:bungeecord-api", version.ref = "bungeecord" }
 commons-compress = { module = "org.apache.commons:commons-compress", version.ref = "commons-compress" }
 minio = { module = "io.minio:minio", version.ref = "minio" }
 gson = { module = "com.google.code.gson:gson", version.ref = "gson" }
