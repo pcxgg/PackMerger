@@ -214,12 +214,13 @@ the way the client actually reads them.
   pack's `elements`, a blockstate with both `variants` and `multipart`). Configs
   without the key get the new default; add `merge.model-policy: deep` to keep the
   previous output.
-- `config-version` is now 4 (was 2). New keys: `distribution.enforce-required`,
+- `config-version` is now 6 (was 2). New keys: `distribution.enforce-required`,
   `distribution.retry`, `distribution.skip-bedrock-players`,
-  `upload.self-host.public-host`, `detect-public-ip`, `public-ip-services`,
-  `verify`, `upload.fallback`, `plugin-packs.watch`, `plugin-packs.stability`,
-  the extra `plugin-packs.sources` keys and `merge.model-policy`. All default
-  safely when missing; `distribution.cache` was removed.
+  `distribution.proxy-secret`, `upload.self-host.public-host`, `detect-public-ip`,
+  `public-ip-services`, `verify`, `upload.fallback`, `plugin-packs.watch`,
+  `plugin-packs.stability`, the extra `plugin-packs.sources` keys,
+  `merge.model-policy` and `merge.output-copy-to`. All default safely when
+  missing; `distribution.cache` was removed.
 - The plugin-pack watcher is **on by default**. It only reads file sizes and
   timestamps; set `plugin-packs.watch.enabled: false` to get the old behaviour
   (re-stage only on merge).
@@ -228,9 +229,6 @@ the way the client actually reads them.
   advisory to the new other-pack-host report (console, `/pm status`, admin join
   notice, `/pm fixup itemsadder`). The older `protect-file-from-unzip.enabled` /
   `.extreme` keys are detected too.
-- `config-version` is now 5 (new key: `merge.output-copy-to`; no default changed).
-- `config-version` is now 6 (new key: `distribution.proxy-secret`, default empty; no
-  default changed).
 - **Proxy message format v2.** Update the proxy plugin together with the backends:
   the 1.2 proxy plugin ignores messages from newer backends (logged as malformed);
   newer proxies still accept the 1.2 format, but only when no secret is set. The
