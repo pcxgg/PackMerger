@@ -96,4 +96,23 @@ class PluginPackAdapterTest {
         assertTrue(entries.contains("assets/minecraft/models/item/stick.json"),
                 "entries must use forward slashes relative to the dir root: " + entries);
     }
+    @Test
+    void zipDirectory_isByteIdenticalForUnchangedContent(@TempDir File tmp) throws Exception {
+        File src = new File(tmp, "src");
+        assertTrue(new File(src, "assets/minecraft/lang").mkdirs());
+        Files.writeString(new File(src, "pack.mcmeta").toPath(), "{}");
+        Files.writeString(new File(src, "assets/minecraft/lang/en_us.json").toPath(), "{\"a\":\"b\"}");
+
+        File first = new File(tmp, "first.zip");
+        PluginPackManager.zipDirectory(src, first);
+        // Touch the sources so their mtimes change; content stays the same.
+        for (File f : List.of(new File(src, "pack.mcmeta"), new File(src, "assets/minecraft/lang/en_us.json"))) {
+            assertTrue(f.setLastModified(f.lastModified() + 120_000));
+        }
+        Thread.sleep(1_100);
+        File second = new File(tmp, "second.zip");
+        PluginPackManager.zipDirectory(src, second);
+
+        assertArrayEquals(Files.readAllBytes(first.toPath()), Files.readAllBytes(second.toPath()));
+    }
 }

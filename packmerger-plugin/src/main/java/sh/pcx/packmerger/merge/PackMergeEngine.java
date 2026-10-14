@@ -22,7 +22,6 @@ import java.time.Instant;
 import java.util.*;
 import java.util.zip.ZipEntry;
 import java.util.zip.ZipFile;
-import java.util.zip.ZipOutputStream;
 import sh.pcx.packmerger.PluginLogger;
 
 /**
@@ -677,7 +676,8 @@ public class PackMergeEngine {
     }
 
     /**
-     * Writes a map of file paths and their contents to a zip archive.
+     * Writes a map of file paths and their contents to a zip archive. The output is
+     * deterministic (see {@link DeterministicZip}).
      *
      * @param outputFile       the zip file to create
      * @param files            map of path &rarr; content bytes
@@ -685,15 +685,8 @@ public class PackMergeEngine {
      * @throws IOException if writing fails
      */
     private void writeZip(File outputFile, Map<String, byte[]> files, int compressionLevel) throws IOException {
-        try (ZipOutputStream zos = new ZipOutputStream(new BufferedOutputStream(new FileOutputStream(outputFile)))) {
-            zos.setLevel(compressionLevel);
-            for (Map.Entry<String, byte[]> entry : files.entrySet()) {
-                ZipEntry ze = new ZipEntry(entry.getKey());
-                zos.putNextEntry(ze);
-                zos.write(entry.getValue());
-                zos.closeEntry();
-            }
-        }
+        // Fixed timestamps + sorted entries: identical content gives an identical SHA-1.
+        DeterministicZip.write(outputFile, files, compressionLevel);
     }
 
     /**
