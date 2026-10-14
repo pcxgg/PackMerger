@@ -34,8 +34,38 @@ project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - ItemsAdder zip protection and `compress-json-files` are detected and reported in
   the admin advisory.
 
+- **`merge.model-policy`** (`whole-file` | `deep`) controls how colliding models
+  and blockstates are combined. See "Changed" for the new default.
+- **Merge notes in provenance**: every collision warning and automatic rewrite a
+  merge strategy makes is stored with the file in the provenance sidecar and shown
+  by `/pm inspect collisions` and `/pm inspect export`. The console prints one
+  summary line per merge.
+- **Overlay format repair**: when two packs' overlay lists are combined and any
+  entry reaches format 64 or below, entries that only declare
+  `min_format`/`max_format` gain the matching `formats` range, which 1.21.9+
+  clients require for the list to load. The merged `pack.mcmeta` also declares the
+  union of both packs' format ranges in a consistent shape (`min_format`/
+  `max_format`, plus `supported_formats` and an in-range `pack_format` when the
+  range reaches format 64 or below).
+
 ### Fixed
 
+- **1.21.4+ item definitions are merged correctly.** Two packs defining the same
+  `items/*.json` as `range_dispatch` on the same property now keep both packs'
+  `entries` (unioned by threshold, sorted, higher priority wins a shared threshold
+  with a warning naming both packs); `select` nodes on the same property have
+  their `cases` unioned by `when`; matching `fallback` nodes are merged too.
+  Before, the lower-priority pack's entries were silently dropped, and mismatched
+  node types produced an invalid hybrid with both `cases` and `entries`.
+  Non-combinable files now go to the higher-priority pack whole, with a warning.
+- **Overlay directories are merged format-aware.** `<overlay>/assets/...` files used
+  to bypass every merge strategy (plain overwrite); they now get the same lang,
+  model, item-definition, atlas, font, sounds and blockstate handling as `assets/`.
+- **Legacy `overrides` are sorted by `custom_model_data`** after merging (entries
+  without one first), so CMD thresholds from different packs resolve correctly.
+- **Hot reload sees nested edits.** The `packs/` watcher now watches every folder
+  inside it (dot-folders excluded), so editing a file inside an unzipped pack
+  folder triggers a merge.
 - **EliteMobs and FreeMinecraftModels** are read from their current locations:
   `EliteMobs/resource_pack` (a folder of packs) and
   `FreeMinecraftModels/output/FreeMinecraftModels.zip` plus the
@@ -56,8 +86,17 @@ project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
-- `config-version` is now 3 (new `plugin-packs.watch`, `plugin-packs.stability`
-  and the extra `plugin-packs.sources` keys; all default safely when missing).
+- **Default model/blockstate merge is now whole-file** (`merge.model-policy:
+  whole-file`). When two packs ship the same model or blockstate, the
+  higher-priority file wins whole; only model `overrides` and blockstate
+  `multipart` (when both files use it) are still combined. The old key-by-key deep
+  merge could build broken hybrids (an `item/generated` model inheriting another
+  pack's `elements`, a blockstate with both `variants` and `multipart`). Configs
+  without the key get the new default; add `merge.model-policy: deep` to keep the
+  previous output.
+- `config-version` is now 4: version 3 added `plugin-packs.watch`,
+  `plugin-packs.stability` and the extra `plugin-packs.sources` keys, version 4
+  adds `merge.model-policy`. All default safely when missing.
 - The plugin-pack watcher is **on by default**. It only reads file sizes and
   timestamps; set `plugin-packs.watch.enabled: false` to get the old behaviour
   (re-stage only on merge).
