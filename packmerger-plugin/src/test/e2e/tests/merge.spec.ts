@@ -1,5 +1,5 @@
 import { expect, sleep, test } from '@plugwright/runner';
-import { downloadPack, entryJson, entryText } from './support/pack.js';
+import { PACK_URL, SELF_HOST_PORT, downloadPack, entryJson, entryText } from './support/pack.js';
 
 test('self-host provider serves the merged pack whose SHA-1 matches /pm status', async ({ player }) => {
   const pack = await downloadPack();
@@ -59,8 +59,8 @@ test('/pm reload reloads the config and re-merges', async ({ player, server }) =
   player.chat('/pm reload');
   await expect(player).toHaveReceivedMessage('Reloading PackMerger...');
   await expect(player).toHaveReceivedMessage('Starting merge process...');
-  await expect(player).toHaveReceivedMessage('Merge and upload complete! URL: http://localhost:28567/pack', { timeout: 15_000 });
-  await expect(server).toHaveReceivedMessage('Self-host HTTP server started on port 28567');
+  await expect(player).toHaveReceivedMessage(`Merge and upload complete! URL: ${PACK_URL}`, { timeout: 15_000 });
+  await expect(server).toHaveReceivedMessage(`Self-host HTTP server started on port ${SELF_HOST_PORT}`);
   await expect(server).toHaveReceivedMessage('Merge order (highest priority first): [overlay-pack, base-pack]');
   await expect(server).not.toHaveReceivedMessage(/\[PackMerger\].*\[ERROR\]|Exception/);
 

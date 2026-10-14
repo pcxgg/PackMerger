@@ -1,15 +1,18 @@
 import { createHash } from 'node:crypto';
+import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { inflateRawSync } from 'node:zlib';
 
 /** Port the self-host provider listens on (see fixtures/PackMerger/config.yml). */
-export const SELF_HOST_PORT = 28567;
-/** URL PackMerger auto-builds for the self-host provider (empty server-ip -> localhost). */
-export const PACK_URL = `http://localhost:${SELF_HOST_PORT}/pack`;
-
 /** The Paper server's run directory (this file compiles to dist/tests/support/pack.js). */
 export const RUN_DIR = fileURLToPath(new URL('../../../generated/local/run/', import.meta.url));
 export const PLUGIN_DIR = `${RUN_DIR}plugins/PackMerger/`;
+
+/** Ports the Gradle build staged for this run (see packmerger-plugin/build.gradle). */
+const PORTS: { httpPort: number; serverPort: number } = JSON.parse(readFileSync(`${PLUGIN_DIR}e2e-ports.json`, 'utf8'));
+export const SELF_HOST_PORT: number = PORTS.httpPort;
+/** URL PackMerger auto-builds for the self-host provider (empty server-ip -> localhost). */
+export const PACK_URL = `http://localhost:${SELF_HOST_PORT}/pack`;
 
 export interface DownloadedPack {
   status: number;

@@ -140,6 +140,11 @@ tasks.withType(JavaCompile).configureEach {
 // End-to-end tests: plugwright boots a real Paper server with the shaded jar and
 // drives it with mineflayer bots. Specs live in src/test/e2e; run with
 // ./gradlew :packmerger-plugin:plugwrightTest (reports in build/reports/plugwright/).
+// Ports are overridable so several checkouts (git worktrees) can run the suite at once:
+//   ./gradlew :packmerger-plugin:plugwrightTest -Pe2ePort=25580 -Pe2eRconPort=25590 -Pe2eHttpPort=25581
+def e2ePort = (findProperty('e2ePort') ?: '25567') as int
+def e2eRconPort = (findProperty('e2eRconPort') ?: '25577') as int
+def e2eHttpPort = (findProperty('e2eHttpPort') ?: '28567') as int
 def e2eFixtures = file('src/test/e2e/fixtures')
 plugwright {
     testsDir.set(file('src/test/e2e'))
@@ -147,17 +152,25 @@ plugwright {
         envs.create('local', me.drownek.plugwright.local.LocalMode.INSTANCE) { spec ->
             spec.minecraftVersion.set('26.1.2')
             spec.acceptEula.set(true)
-            spec.port.set(25567)
-            spec.rconPort.set(25577)
+            spec.port.set(e2ePort)
+            spec.rconPort.set(e2eRconPort)
             spec.jvmArgs.set(['-Xmx2G'])
             // Stage fixtures/** (PackMerger config.yml + fixture packs, bStats opt-out)
-            // into plugins/ before every server start.
+            // into plugins/ before every server start. The self-host port in the staged
+            // config.yml follows e2eHttpPort, and the specs read it from e2e-ports.json.
             spec.writeFiles { files ->
                 fileTree(e2eFixtures).visit { details ->
                     if (!details.directory) {
-                        files.file("plugins/${details.relativePath.pathString}", details.file)
+                        if (details.relativePath.pathString == 'PackMerger/config.yml') {
+                            files.file("plugins/PackMerger/config.yml",
+                                details.file.getText('UTF-8').replace('port: 28567', "port: ${e2eHttpPort}"))
+                        } else {
+                            files.file("plugins/${details.relativePath.pathString}", details.file)
+                        }
                     }
                 }
+                files.file('plugins/PackMerger/e2e-ports.json',
+                    groovy.json.JsonOutput.toJson([httpPort: e2eHttpPort, serverPort: e2ePort]))
             }
         }
     }
