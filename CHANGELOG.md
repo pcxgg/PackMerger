@@ -6,8 +6,6 @@ project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
-- Hosting route wording now distinguishes a failed reachability check from a non-routable auto host; the file watcher warns when it cannot watch every folder (inotify limit); `/pm reload` republish works on a stable copy of the output zip.
-
 Delivery reliability: every player gets the pack, every time, and the pack that is
 advertised is always the pack that is served. Self-hosting works out of the box, and
 tells you exactly what to fix when it can't.
@@ -115,6 +113,7 @@ the way the client actually reads them.
   and carrier, or "update pending until a player joins".
 
 ### Fixed
+- Hosting route wording distinguishes a failed reachability check from a non-routable auto host; the file watcher warns when it cannot watch every folder (inotify limit); the `/pm reload` republish works on a stable copy of the output zip.
 - **Returning players got no pack.** The persistent player cache skipped the send on rejoin when the hash matched, but the client drops server packs on disconnect, so those players played without the pack (and `required` was never applied to them). The pack is now sent on every join; the client's own SHA-1 cache still avoids re-downloading an unchanged pack.
 - **Every merge was a "new pack".** Zip entries carried the current time, so identical content produced a different SHA-1 each merge (notify/resend spam, client re-downloads, S3 object churn). Merged and staged plugin zips are now deterministic (sorted entries, fixed timestamps).
 - **Hash/URL mismatch window.** The new SHA-1 was advertised before the upload finished, and a failed upload left the new hash paired with the old URL. The `(URL, SHA-1, pack UUID)` record is now published as one unit only after the upload succeeds; a failed upload keeps the previous pack live (and fires `PackUploadFailedEvent`). Self-host serves a snapshot (`output/.self-host/<sha1>.zip`), so a running merge never changes the bytes behind an advertised hash, and `upload()` fails instead of advertising a URL when the HTTP server could not bind.
