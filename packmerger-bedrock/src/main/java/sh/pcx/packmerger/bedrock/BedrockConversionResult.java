@@ -11,13 +11,16 @@ import java.util.List;
  * @param itemsConverted      number of custom-model-data entries mapped
  * @param texturesCopied      number of textures copied into the Bedrock pack
  * @param warnings            items/models skipped or otherwise notable (e.g. 3D models, unresolved textures)
+ * @param manifestVersion     the {@code .mcpack} manifest version, derived from its content (e.g.
+ *                            {@code "1.4821.903"}), or {@code null} if nothing was produced
  */
 public record BedrockConversionResult(
         Path mcpackFile,
         Path geyserMappingsFile,
         int itemsConverted,
         int texturesCopied,
-        List<String> warnings) {
+        List<String> warnings,
+        String manifestVersion) {
 
     public boolean producedAnything() {
         return mcpackFile != null && itemsConverted > 0;

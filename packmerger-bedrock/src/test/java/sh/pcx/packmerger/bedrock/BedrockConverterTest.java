@@ -85,6 +85,40 @@ class BedrockConverterTest {
         assertFalse(result.warnings().isEmpty());
     }
 
+    @Test
+    void manifestVersionFollowsTheContent(@TempDir Path tmp) throws IOException {
+        Map<String, String> pack = new LinkedHashMap<>();
+        pack.put("assets/minecraft/items/paper.json", """
+                {"model":{"type":"minecraft:range_dispatch","property":"minecraft:custom_model_data",
+                "entries":[{"threshold":7,"model":{"type":"minecraft:model","model":"test:item/cool"}}]}}""");
+        pack.put("assets/test/models/item/cool.json",
+                "{\"parent\":\"minecraft:item/generated\",\"textures\":{\"layer0\":\"test:item/cool\"}}");
+        BedrockConverter conv = new BedrockConverter(new BedrockConverterOptions("TestPack", false));
+
+        Path zip1 = tmp.resolve("a.zip");
+        writeZip(zip1, pack, Map.of("assets/test/textures/item/cool.png", new byte[]{1, 2, 3}));
+        BedrockConversionResult first = conv.convert(zip1, tmp.resolve("out1"));
+        BedrockConversionResult same = conv.convert(zip1, tmp.resolve("out2"));
+        Path zip2 = tmp.resolve("b.zip");
+        writeZip(zip2, pack, Map.of("assets/test/textures/item/cool.png", new byte[]{9, 9, 9}));
+        BedrockConversionResult changed = conv.convert(zip2, tmp.resolve("out3"));
+
+        assertEquals(first.manifestVersion(), same.manifestVersion(), "same content, same version");
+        assertNotEquals(first.manifestVersion(), changed.manifestVersion(), "new texture, new version");
+        assertTrue(first.manifestVersion().matches("1\\.\\d+\\.\\d+"), first.manifestVersion());
+
+        JsonObject manifest = JsonParser.parseString(new String(readZip(changed.mcpackFile()).get("manifest.json"),
+                StandardCharsets.UTF_8)).getAsJsonObject();
+        String header = manifest.getAsJsonObject("header").get("version").toString();
+        String module = manifest.getAsJsonArray("modules").get(0).getAsJsonObject().get("version").toString();
+        assertEquals("[" + changed.manifestVersion().replace('.', ',') + "]", header);
+        assertEquals(header, module);
+        // The UUIDs stay fixed so Geyser/clients treat it as the same pack, updated.
+        assertEquals(JsonParser.parseString(new String(readZip(first.mcpackFile()).get("manifest.json"),
+                        StandardCharsets.UTF_8)).getAsJsonObject().getAsJsonObject("header").get("uuid"),
+                manifest.getAsJsonObject("header").get("uuid"));
+    }
+
     // --- helpers ---
 
     private static void writeZip(Path zip, Map<String, String> text, Map<String, byte[]> bin) throws IOException {

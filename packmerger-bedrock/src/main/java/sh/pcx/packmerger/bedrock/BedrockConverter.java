@@ -115,17 +115,21 @@ public final class BedrockConverter {
         }
 
         if (items == 0) {
-            return new BedrockConversionResult(null, null, 0, 0, warnings);
+            return new BedrockConversionResult(null, null, 0, 0, warnings, null);
         }
 
         Files.createDirectories(outputDir);
         String base = sanitizeFile(options.packName());
         Path mcpack = outputDir.resolve(base + ".mcpack");
-        writeMcpack(mcpack, textureData, bedrockTextures, entries.get("pack.png"));
+        byte[] itemTextureJson = itemTextureJson(textureData);
+        byte[] mappingsJson = mappingsJson(mappingsByItem);
+        int[] version = contentVersion(itemTextureJson, bedrockTextures, entries.get("pack.png"), mappingsJson);
+        writeMcpack(mcpack, itemTextureJson, bedrockTextures, entries.get("pack.png"), version);
         Path mappings = outputDir.resolve(base + ".geyser.json");
-        writeMappings(mappings, mappingsByItem);
+        Files.write(mappings, mappingsJson);
 
-        return new BedrockConversionResult(mcpack, mappings, items, bedrockTextures.size(), warnings);
+        return new BedrockConversionResult(mcpack, mappings, items, bedrockTextures.size(), warnings,
+                version[0] + "." + version[1] + "." + version[2]);
     }
 
     // ------------------------------------------------------------------ parsing
@@ -217,16 +221,48 @@ public final class BedrockConverter {
 
     // ------------------------------------------------------------------ writing
 
-    private void writeMcpack(Path mcpack, JsonObject textureData, Map<String, byte[]> textures, byte[] packIcon)
-            throws IOException {
-        try (ZipOutputStream zos = new ZipOutputStream(Files.newOutputStream(mcpack))) {
-            putEntry(zos, "manifest.json", GSON.toJson(buildManifest()).getBytes(StandardCharsets.UTF_8));
+    private byte[] itemTextureJson(JsonObject textureData) {
+        JsonObject itemTexture = new JsonObject();
+        itemTexture.addProperty("resource_pack_name", options.packName());
+        itemTexture.addProperty("texture_name", "atlas.items");
+        itemTexture.add("texture_data", textureData);
+        return GSON.toJson(itemTexture).getBytes(StandardCharsets.UTF_8);
+    }
 
-            JsonObject itemTexture = new JsonObject();
-            itemTexture.addProperty("resource_pack_name", options.packName());
-            itemTexture.addProperty("texture_name", "atlas.items");
-            itemTexture.add("texture_data", textureData);
-            putEntry(zos, "textures/item_texture.json", GSON.toJson(itemTexture).getBytes(StandardCharsets.UTF_8));
+    /**
+     * Manifest version derived from the converted content. Bedrock clients (and Geyser)
+     * cache a pack by UUID + version, and the UUIDs here are fixed per pack name, so a
+     * fixed version would let clients keep stale icons. {@code [1, a, b]} with {@code a}
+     * and {@code b} taken from a SHA-256 of everything that ends up in the pack (and the
+     * mappings): the same content always gets the same version, changed content a new one.
+     */
+    static int[] contentVersion(byte[] itemTextureJson, Map<String, byte[]> textures, byte[] packIcon,
+                                byte[] mappingsJson) {
+        try {
+            java.security.MessageDigest md = java.security.MessageDigest.getInstance("SHA-256");
+            update(md, "item_texture.json", itemTextureJson);
+            new java.util.TreeMap<>(textures).forEach((k, v) -> update(md, k, v));
+            if (packIcon != null) update(md, "pack_icon.png", packIcon);
+            update(md, "mappings", mappingsJson);
+            byte[] h = md.digest();
+            return new int[]{1, ((h[0] & 0xff) << 8) | (h[1] & 0xff), ((h[2] & 0xff) << 8) | (h[3] & 0xff)};
+        } catch (java.security.NoSuchAlgorithmException e) {
+            throw new IllegalStateException("SHA-256 unavailable", e);
+        }
+    }
+
+    private static void update(java.security.MessageDigest md, String name, byte[] bytes) {
+        md.update(name.getBytes(StandardCharsets.UTF_8));
+        md.update((byte) 0);
+        md.update(java.nio.ByteBuffer.allocate(4).putInt(bytes.length).array());
+        md.update(bytes);
+    }
+
+    private void writeMcpack(Path mcpack, byte[] itemTextureJson, Map<String, byte[]> textures, byte[] packIcon,
+                             int[] version) throws IOException {
+        try (ZipOutputStream zos = new ZipOutputStream(Files.newOutputStream(mcpack))) {
+            putEntry(zos, "manifest.json", GSON.toJson(buildManifest(version)).getBytes(StandardCharsets.UTF_8));
+            putEntry(zos, "textures/item_texture.json", itemTextureJson);
 
             for (Map.Entry<String, byte[]> t : textures.entrySet()) {
                 putEntry(zos, t.getKey(), t.getValue());
@@ -237,7 +273,7 @@ public final class BedrockConverter {
         }
     }
 
-    private JsonObject buildManifest() {
+    private JsonObject buildManifest(int[] version) {
         JsonObject manifest = new JsonObject();
         manifest.addProperty("format_version", 2);
 
@@ -245,37 +281,33 @@ public final class BedrockConverter {
         header.addProperty("name", options.packName());
         header.addProperty("description", "Bedrock pack generated by PackMerger");
         header.addProperty("uuid", deterministicUuid("header"));
-        header.add("version", versionArray());
+        header.add("version", intArray(version[0], version[1], version[2]));
         header.add("min_engine_version", intArray(1, 21, 0));
         manifest.add("header", header);
 
         JsonObject module = new JsonObject();
         module.addProperty("type", "resources");
         module.addProperty("uuid", deterministicUuid("module"));
-        module.add("version", versionArray());
+        module.add("version", intArray(version[0], version[1], version[2]));
         JsonArray modules = new JsonArray();
         modules.add(module);
         manifest.add("modules", modules);
         return manifest;
     }
 
-    private void writeMappings(Path file, Map<String, JsonArray> mappingsByItem) throws IOException {
+    private static byte[] mappingsJson(Map<String, JsonArray> mappingsByItem) {
         JsonObject root = new JsonObject();
         root.addProperty("format_version", "1");
         JsonObject items = new JsonObject();
         mappingsByItem.forEach(items::add);
         root.add("items", items);
-        Files.writeString(file, GSON.toJson(root), StandardCharsets.UTF_8);
+        return GSON.toJson(root).getBytes(StandardCharsets.UTF_8);
     }
 
     // ------------------------------------------------------------------ helpers
 
     private String deterministicUuid(String role) {
         return UUID.nameUUIDFromBytes((options.packName() + ":" + role).getBytes(StandardCharsets.UTF_8)).toString();
-    }
-
-    private static JsonArray versionArray() {
-        return intArray(1, 0, 0);
     }
 
     private static JsonArray intArray(int a, int b, int c) {
