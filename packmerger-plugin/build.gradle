@@ -8,7 +8,7 @@ plugins {
 // The shipped jar takes the module name: packmerger-plugin-<version>.jar.
 
 java {
-    // Minecraft / Paper 26.1.2 requires Java 25.
+    // Minecraft / Paper 26.x requires Java 25.
     toolchain {
         languageVersion = JavaLanguageVersion.of(25)
     }
@@ -185,6 +185,8 @@ plugwright {
     testsDir.set(file('src/test/e2e'))
     environments { envs ->
         envs.create('local', me.drownek.plugwright.local.LocalMode.INSTANCE) { spec ->
+            // Newest Paper the mineflayer bots can join (minecraft-data stops at 26.1); the
+            // plugin itself is compiled against the latest Paper API (gradle/libs.versions.toml).
             spec.minecraftVersion.set('26.1.2')
             spec.acceptEula.set(true)
             spec.port.set(e2ePort)

@@ -3,8 +3,11 @@
 # Dependabot (see .github/dependabot.yml).
 [versions]
 # Paper API. New (2026+) year-based scheme: <year>.<drop>.<patch>.build.<n>-<stage>.
-# `.build.+` resolves the latest published build of 26.1.2. Pin to a specific
-# `26.1.2.build.<n>-stable` if you need fully reproducible compiles.
+# Compile against the OLDEST supported Paper API on purpose. Paper 26.3 ships Adventure 5;
+# a jar compiled against it binds Adventure-5-only descriptors (e.g. TextComponent.Builder
+# .build()) that throw NoSuchMethodError on 26.1/26.2 servers, while Adventure 5 keeps the
+# Adventure-4 descriptors as bridges. So: compile on 26.1.2, test on 26.3 (plugwright e2e).
+# `.build.+` resolves the latest published build of 26.1.2.
 paper = "26.1.2.build.+"
 commons-compress = "1.28.0"
 # MinIO 9.x is a major API rewrite (io.minio.http.Method -> io.minio.Http.Method);

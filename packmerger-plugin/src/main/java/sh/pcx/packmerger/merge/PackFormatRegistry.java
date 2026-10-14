@@ -34,6 +34,8 @@ public final class PackFormatRegistry {
     private static final List<Entry> TABLE = List.of(
             // 2026+ year-based scheme: <year>.<drop>[.<patch>]. Mojang switched
             // from 1.21.x to this after 1.21.11.
+            // Values read from each Paper server jar's version.json (pack_version.resource_major).
+            new Entry("26.3",    97),
             new Entry("26.2",    88),
             new Entry("26.1",    84),
             // Tail of the 1.21 line. Pack format gained minor versions in 1.21.9

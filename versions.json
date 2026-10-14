@@ -1,5 +1,5 @@
 {
-  "latest": "1.2.0",
+  "latest": "1.3.0",
   "latest_url": "https://www.spigotmc.org/resources/packmerger.132700/updates",
-  "latest_notes": "Paper 26.1.2 / Java 25. Automatic plugin-pack discovery (Oraxen, Nexo, ItemsAdder, ModelEngine, EliteMobs, FreeMinecraftModels) with format-aware deep merge; opt-in Bedrock/Geyser conversion; Velocity proxy for network-wide distribution. Monorepo + CI; pack-format guardrail understands 26.1 min_format/max_format."
+  "latest_notes": "Paper 26.3 support (one jar for 26.1-26.3). Reliable delivery (pack sent on every join, early joiners, automatic resend, atomic URL/SHA-1 publish, previous pack stays live across restarts); self-host that works out of the box (public host detection, reachability check, fallback providers, HEAD/ETag/Range); 19 plugin-pack integrations with clusters and a rebuild watcher; correct 1.21.4+ item-definition merging; pack registration API; /pm fixup for ItemsAdder/Oraxen/Nexo; BungeeCord proxy plugin and signed proxy messages."
 }

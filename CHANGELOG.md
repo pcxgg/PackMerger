@@ -4,7 +4,7 @@ All notable changes to PackMerger are documented here. The format is loosely
 based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the
 project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [1.3.0] - 2026-10-13
 
 Delivery reliability: every player gets the pack, every time, and the pack that is
 advertised is always the pack that is served. Self-hosting works out of the box, and
@@ -196,6 +196,7 @@ the way the client actually reads them.
 - `config.yml` mentioned a Bungee proxy that did not exist; it does now.
 
 ### Changed
+- **Paper 26.3 support.** The pack-format registry maps 26.3 to format 97 (26.2 → 88 verified against the server jar). The jar stays compiled against `paper-api 26.1.2` on purpose: Paper 26.3 ships Adventure 5, and a jar compiled against it binds Adventure-5-only descriptors that throw `NoSuchMethodError` on 26.1/26.2, while Adventure 5 keeps the Adventure-4 descriptors as bridges. `api-version` stays `26.1`.
 - **`upload.self-host.port` defaults to `-1` (Minecraft port + 1)** instead of `8080`. Configs that set a port explicitly (the generated config.yml always did, with `8080`) keep that port; only a config without the key moves to Minecraft port + 1. On hosting panels, allocate that port (or set an allocated one).
 - **`public-url` is used as a complete URL** (see Fixed). If you relied on `/pack` being appended to a URL with another path (e.g. `https://example.com/mc` meaning `https://example.com/mc/pack`), write the full URL.
 - **`distribution.cache` was removed.** Existing configs keep working; the section is ignored and a one-line notice suggests deleting it. `plugins/PackMerger/cache/player-cache.json` is no longer read or written and can be deleted.

@@ -43,7 +43,7 @@ Run against a real server before tagging a release. The plugin advertises
 
 ### Paper
 
-1. Drop the shaded jar in `plugins/`, start a Paper **26.1.2** server (Java 25).
+1. Drop the shaded jar in `plugins/`, start a Paper **26.3** server (Java 25; the jar is compiled against the 26.1.2 API and must also be checked on a 26.1.2 server).
 2. Confirm enable: console shows `PackMerger enabled!` and (at `log-level: debug`)
    the pack-format registry line reporting the server's Minecraft version.
 3. `/pm status` — reports the current merged pack + URL.

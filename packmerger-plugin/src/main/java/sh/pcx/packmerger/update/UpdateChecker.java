@@ -21,7 +21,7 @@ import java.util.concurrent.atomic.AtomicReference;
  * <p>The manifest format is intentionally minimal:</p>
  * <pre>
  * {
- *   "latest": "1.2.0",
+ *   "latest": "1.3.0",
  *   "latest_url": "https://www.spigotmc.org/resources/packmerger.132700/updates",
  *   "latest_notes": "Auto plugin-pack discovery, Bedrock/Geyser, Velocity proxy, Paper 26.1.2"
  * }

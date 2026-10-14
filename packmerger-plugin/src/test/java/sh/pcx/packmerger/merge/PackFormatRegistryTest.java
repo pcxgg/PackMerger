@@ -40,6 +40,7 @@ class PackFormatRegistryTest {
         assertEquals(84, PackFormatRegistry.forMinecraftVersion("26.1"));
         assertEquals(84, PackFormatRegistry.forMinecraftVersion("26.1.2"));
         assertEquals(88, PackFormatRegistry.forMinecraftVersion("26.2"));
+        assertEquals(97, PackFormatRegistry.forMinecraftVersion("26.3"));
     }
 
     @Test

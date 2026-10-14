@@ -48,14 +48,14 @@ A Paper plugin that merges multiple Minecraft resource packs into a single pack,
 
 ## Requirements
 
-- **Paper 26.1+** (built against Paper API 26.1.2) or **Folia** 26.1+
+- **Paper 26.1+** (compiled against the 26.1.2 API so one jar runs on 26.1, 26.2 and 26.3; tested on 26.3) or **Folia** 26.1+
 - **Java 25** or newer
 - `folia-supported: true` in plugin.yml — every scheduler call routes through Paper/Folia's region-aware APIs so the plugin runs without `UnsupportedOperationException`s on Folia
 
 ## Installation
 
 1. Build the plugin (see [Building](#building)) or download the release jar
-2. Place `packmerger-plugin-1.2.0.jar` into your server's `plugins/` folder
+2. Place `packmerger-plugin-1.3.0.jar` into your server's `plugins/` folder
 3. Start the server — the plugin generates `config.yml` and creates the `packs/`, `output/`, and `cache/` directories under `plugins/PackMerger/`
 4. Place your resource pack `.zip` files or unzipped pack folders into `plugins/PackMerger/packs/`
 5. Edit `plugins/PackMerger/config.yml` to configure priority order, upload provider, and distribution settings
@@ -77,12 +77,20 @@ Requires Java 25 to compile.
 
 ### End-to-end tests
 
-`./gradlew :packmerger-plugin:plugwrightTest` boots a throwaway Paper 26.1.2 server (port 25567) with the
+`./gradlew :packmerger-plugin:plugwrightTest` boots a throwaway Paper 26.1.2 server (the newest version the mineflayer bots can join; port 25567) with the
 built jar and fixture packs from `packmerger-plugin/src/test/e2e/fixtures/`, then drives it with
 [plugwright](https://github.com/Drownek/plugwright) bots. Specs live in `packmerger-plugin/src/test/e2e/tests/`;
 needs Node 22+, and reports land in `packmerger-plugin/build/reports/plugwright/`. Two test-only plugins built from
 `packmerger-plugin/src/e2ePlugin/` are staged next to it: `PmApiTest` uses the public API from its own
 classloader, and an empty stand-in named `ItemsAdder` lets the other-pack-host check run. Neither is shipped.
+
+## Releasing
+
+1. Bump `version` in `build.gradle`, turn the `[Unreleased]` section of `CHANGELOG.md` into `[x.y.z] - YYYY-MM-DD`, update `versions.json` (the in-game update check reads it) and refresh `spigot-resource.bbcode`.
+2. Commit, tag `vx.y.z` and push the tag. The Release workflow builds the plugin, Velocity and Bungee jars and creates the GitHub release from that changelog section.
+3. Upload `packmerger-plugin-x.y.z.jar` to SpigotMC and paste `spigot-update-x.y.z.bbcode` as the update post.
+
+`spigot-resource.bbcode` is the SpigotMC resource page. SpigotMC runs XenForo 1.4, whose BBCode is limited: only `[B] [I] [U] [S] [COLOR] [SIZE] [FONT] [URL] [IMG] [LIST] [LIST=1] [*] [CODE] [QUOTE] [SPOILER] [CENTER] [LEFT] [RIGHT] [INDENT]` render. There are no tables, headings, `[ICODE]`, `[HR]` or Markdown, so section headings are centred coloured text, inline code is `[FONT=Courier New]`, and `[CODE]` blocks go inside `[SPOILER]`s rather than lists.
 
 ## Configuration
 

@@ -1,0 +1,42 @@
+[B]PackMerger 1.3.0[/B] - every player gets the pack, every time
+
+This release fixes the delivery and hosting problems that made players play without the pack, triples the number of plugins whose packs are picked up automatically, merges 1.21.4+ item definitions correctly, and adds a plugin API, a fix-up command for other pack hosts and a BungeeCord proxy plugin.
+
+[B]Fixed[/B]
+[LIST]
+[*][B]Returning players got no pack.[/B] The player cache skipped the send on rejoin, but the client drops server packs on disconnect. The pack is now sent on every join; the client's own SHA-1 cache avoids re-downloading.
+[*][B]Every merge looked like a new pack.[/B] Zip timestamps made identical content hash differently. Merged and staged zips are now deterministic.
+[*][B]Hash/URL mismatch window.[/B] URL, SHA-1 and pack id are published together, only after the upload succeeded. A failed upload keeps the previous pack live.
+[*][B]No pack after a restart or /pm reload[/B] until a merge finished. The last merged pack is republished immediately; self-host no longer answers 503 after a reload.
+[*][B]Players who joined before the first merge[/B] now get it as soon as it is published; failed downloads are resent automatically (capped), and the status handling only reacts to PackMerger's own pack.
+[*][B]Pack stacking and stripping.[/B] One stable pack id per server; PackMerger removes only its own previous pack instead of clearing packs sent by a proxy or other plugins.
+[*][B]Self-host advertised localhost on most servers.[/B] The host is resolved from [FONT=Courier New]public-url[/FONT], [FONT=Courier New]public-host[/FONT], an opt-in public IP lookup, [FONT=Courier New]server-ip[/FONT] and the bind address; a non-routable result is loudly warned about and explained in [FONT=Courier New]/pm status[/FONT]. The HTTP handler now matches exact paths and supports HEAD, ETag/304 and Range.
+[*][B]1.21.4+ item definitions[/B] from two packs are unioned instead of the lower-priority one being dropped; overlay folders get the same merge rules as [FONT=Courier New]assets/[/FONT]; legacy overrides are sorted by CustomModelData; hot reload sees edits inside pack folders.
+[*][B]Plugin packs:[/B] corrected EliteMobs and FreeMinecraftModels paths, broken Nexo/ItemsAdder/Oraxen fallbacks removed, stale staged packs deleted, half-written zips never staged.
+[*][B]The plugin API and events were invisible to other plugins[/B] (isolated classloader). They can be used now.
+[/LIST]
+
+[B]Added[/B]
+[LIST]
+[*]Download verification after every upload, [FONT=Courier New]upload.fallback[/FONT] providers, [FONT=Courier New]public-host[/FONT], opt-in [FONT=Courier New]detect-public-ip[/FONT], port and rcon/query collision warnings, admin join notices when hosting looks broken.
+[*][FONT=Courier New]distribution.retry[/FONT], [FONT=Courier New]distribution.enforce-required[/FONT] (off by default: kick on decline or after failed retries), [FONT=Courier New]distribution.skip-bedrock-players[/FONT].
+[*]13 more plugin-pack integrations (Nova, BetterHUD, ValhallaMMO, vane-core, BackpackPlus, BetterStructures, CannonRTP, EternalTD, InfiniteVehicles, MegaBlockSurvivors, ResurrectionChest, MMOInventory, RealisticSurvival), cluster folders, operator-defined adapters, a watcher that re-merges when a plugin rebuilds its pack, and [FONT=Courier New]/pm merge[/FONT].
+[*][FONT=Courier New]merge.model-policy[/FONT], merge notes in [FONT=Courier New]/pm inspect[/FONT], overlay format repair.
+[*]Pack registration API ([FONT=Courier New]PackMergerApi.registerPack[/FONT]) and [FONT=Courier New]PackMergerCollectPacksEvent[/FONT].
+[*]Detection of ItemsAdder, Oraxen and Nexo hosting their own pack, with [FONT=Courier New]/pm fixup <plugin>[/FONT] to back up and fix their config.
+[*][FONT=Courier New]/pm verbose[/FONT], a much richer [FONT=Courier New]/pm status[/FONT], [FONT=Courier New]merge.output-copy-to[/FONT], Geyser folder auto-detection, Bedrock manifest versions that follow the content.
+[*]BungeeCord proxy plugin, HMAC-signed proxy messages ([FONT=Courier New]distribution.proxy-secret[/FONT]), persisted proxy state, network or per-server proxy modes.
+[/LIST]
+
+[B]Changed - read before updating[/B]
+[LIST]
+[*]Paper 26.3 support: the pack-format check knows 26.3 (format 97). The jar is compiled against the 26.1.2 API on purpose (Paper 26.3 ships Adventure 5; a jar built against it would crash on 26.1/26.2) and tested on 26.3, so one jar runs on 26.1, 26.2 and 26.3.
+[*]Update the Velocity/Bungee proxy plugin together with the backends: the proxy message format is now v2.
+[*][FONT=Courier New]upload.self-host.port[/FONT] defaults to Minecraft port + 1 for configs without the key (existing explicit ports are kept).
+[*][FONT=Courier New]public-url[/FONT] is now a complete URL; [FONT=Courier New]/pack[/FONT] is only appended when the URL has no path.
+[*][FONT=Courier New]distribution.cache[/FONT] is gone (ignored if present). Replace mode no longer clears other plugins' packs.
+[*]Default model/blockstate merge is whole-file; set [FONT=Courier New]merge.model-policy: deep[/FONT] for the old behaviour.
+[*]The plugin-pack watcher is on by default. Config version is now 6; old configs keep working.
+[/LIST]
+
+Full changelog: [URL='https://github.com/PCX-Network/PackMerger/blob/master/CHANGELOG.md']CHANGELOG.md[/URL]
