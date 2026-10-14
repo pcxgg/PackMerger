@@ -11,7 +11,7 @@
 # startup if this is older than the plugin expects, so you know to review the
 # latest config.yml for newly added options. Missing keys always fall back to
 # safe defaults, so upgrades never break — this is purely informational.
-config-version: 2
+config-version: 4
 
 # =============================================================================
 # Server Identity
@@ -103,8 +103,10 @@ remote-packs:
 # "elitemobs", "freeminecraftmodels").
 #
 # Because other plugins generate their packs after they enable, the first merge on
-# startup is delayed by 'merge-delay-seconds'. After running a plugin's own pack
-# build (e.g. /oraxen reload), run /pm merge to pick up its fresh output.
+# startup is delayed by 'merge-delay-seconds'. Meanwhile the pack merged before the
+# restart (if any) is served right away, so players joining early still get a pack.
+# After running a plugin's own pack build (e.g. /oraxen reload), run /pm reload to
+# pick up its fresh output.
 plugin-packs:
   enabled: true
   merge-delay-seconds: 10
@@ -261,6 +263,18 @@ upload:
   # Default: "self-host"
   provider: "self-host"
 
+  # Providers to publish through, in order, when the provider above can't be
+  # used: its upload failed, or (self-host) the reachability check failed or
+  # the auto-detected host is not routable. Only providers that are configured
+  # below are tried. If none works, a self-host URL that failed its check is
+  # still used rather than sending no pack.
+  # Example: ["s3"] - self-host first, Cloudflare R2/S3 when self-host is not
+  # reachable from the internet.
+  #
+  # Valid entries: "self-host", "s3", "polymath"
+  # Default: [] (no fallback)
+  fallback: []
+
   # ---- Polymath Configuration ----
   # Only used when provider is "polymath". Uploads to a Polymath server.
   # Polymath is a lightweight Python web server for hosting resource packs.
@@ -289,27 +303,77 @@ upload:
     id: ""
 
   # ---- Self-Host Configuration ----
-  # Only used when provider is "self-host". Runs a built-in HTTP server.
+  # Only used when provider is "self-host" (or "self-host" is listed in fallback).
+  # Runs a built-in HTTP server that serves the pack at /pack. It answers GET and
+  # HEAD, sends a strong ETag (the pack's SHA-1) and honours If-None-Match (304)
+  # and Range (206), so CDNs, reverse proxies and health checks work with it.
   self-host:
-    # The port for the built-in HTTP server to listen on.
-    # Make sure this port is open in your firewall and not used by another service.
-    # Players will download from: http://<your-server-ip>:<port>/pack
+    # The port for the built-in HTTP server to listen on (TCP, all interfaces).
+    # The port must be open in your firewall / forwarded by your router.
     #
-    # Set to -1 to derive the port automatically from the Minecraft server port + 1
-    # (e.g. 25565 -> 25566), so you don't have to pick a free port manually.
+    # -1 = the Minecraft server port + 1 (e.g. 25565 -> 25566). On hosting panels
+    # (Pterodactyl, Pelican, ...) add a second port allocation to the server and
+    # set this to that port (or make it the Minecraft port + 1 and keep -1).
+    # PackMerger warns if the port equals the Minecraft port, rcon.port (when
+    # RCON is enabled) or query.port (when query is enabled).
     #
-    # Default: 8080
-    port: 8080
+    # Valid values: -1, or 1-65535
+    # Default: -1 (was 8080 before config-version 4; an explicit port is kept)
+    port: -1
 
-    # The public-facing URL that players use to download the pack.
-    # If left empty, the plugin auto-constructs it using the server-ip from
-    # server.properties and the port above (e.g. http://1.2.3.4:8080/pack).
+    # The complete public URL players download the pack from. Used as-is:
+    #   "https://cdn.example.com/rp.zip"    -> exactly that URL
+    #   "https://example.com/packs/pack"    -> exactly that URL
+    #   "http://play.example.com:25566"     -> "/pack" is appended (no path given)
+    # Set this when the server is behind a reverse proxy, a CDN or NAT. The proxy
+    # must forward to http://<this machine>:<port>/pack; requests that arrive with
+    # this URL's own path are served too.
     #
-    # Set this explicitly if your server is behind a reverse proxy, NAT, or
-    # if the auto-detected IP is incorrect (e.g. shows "localhost").
-    #
-    # Default: "" (auto-detect)
+    # Default: "" (auto: see public-host below)
     public-url: ""
+
+    # When public-url is empty, the URL is built as http://<host>:<port>/pack and
+    # the host is the first publicly routable one of:
+    #   1. public-host (below)
+    #   2. this server's public IP, if detect-public-ip is true
+    #   3. server-ip from server.properties
+    #   4. the bind address (advertised as "localhost")
+    # Loopback, private (10.x, 172.16-31.x, 192.168.x), link-local, CGNAT
+    # (100.64-127.x), 0.0.0.0 and IPv6 unique-local addresses are NOT routable:
+    # if nothing better is found PackMerger still uses one of them (LAN players
+    # can download) but warns on every merge, tells admins on join and shows
+    # the fix in /pm status.
+    #
+    # Host name or IP only, no scheme or port. Example: "play.example.com"
+    # Default: "" (not set)
+    public-host: ""
+
+    # Look up this server's public IP address through a third-party service.
+    # PRIVACY: when true, PackMerger makes an outbound HTTPS request to the
+    # services below (by default Amazon checkip and ipify), which learn this
+    # server's IP address. Off by default; done once per start / reload, only
+    # when public-url and public-host are both empty.
+    #
+    # Default: false
+    detect-public-ip: false
+
+    # Services asked for the public IP, in order. Each must answer with the IP
+    # as plain text.
+    public-ip-services:
+      - "https://checkip.amazonaws.com"
+      - "https://api.ipify.org"
+
+    # After every upload, check that the pack can really be downloaded: the
+    # first KiB is fetched from 127.0.0.1:<port> and from the advertised URL
+    # (this machine connecting to its own public address, which also catches
+    # routers without NAT hairpinning) and compared byte for byte. Runs off the
+    # main thread. A failure is logged, shown to admins and in /pm status, and
+    # switches to the next provider in upload.fallback when one is configured.
+    # If you set public-url yourself, a failing advertised-URL check only warns
+    # (some NATs/CDNs can't be reached from inside), it never switches.
+    #
+    # Default: true
+    verify: true
 
     # Maximum number of concurrent pack downloads allowed at the same time.
     # When the limit is reached, additional download requests get a 429 (Too Many
@@ -402,12 +466,24 @@ distribution:
   # Default: true
   enabled: true
 
-  # Whether the resource pack is required. If true, players who decline the pack
-  # will be kicked from the server. The kick message is controlled by Minecraft.
+  # Marks the pack as required in the request the client receives. The client then
+  # shows a "required" prompt with no "proceed without" button. On its own this flag
+  # does NOT kick anyone: PackMerger only kicks when enforce-required (below) is on.
   #
   # Valid values: true, false
   # Default: false
   required: false
+
+  # Server-side enforcement for a required pack (only used when required: true).
+  # When enabled, PackMerger kicks a player who declines the pack, or whose download
+  # still fails after the retries below are used up. INVALID_URL and FAILED_RELOAD
+  # never kick: those point at a hosting or pack problem that would lock everyone out.
+  enforce-required:
+    # Valid values: true, false
+    # Default: false (the required flag is sent, nobody is kicked)
+    enabled: false
+    # Kick message (MiniMessage).
+    kick-message: "<red>This server requires its resource pack.</red> <gray>Rejoin and accept it to play.</gray>"
 
   # Custom prompt message shown to players when they receive the resource pack request.
   # Uses MiniMessage formatting (https://docs.advntr.dev/minimessage/format.html).
@@ -418,15 +494,15 @@ distribution:
   # Default: "" (Minecraft default)
   prompt-message: ""
 
-  # Controls how the pack is applied to the player's client:
-  #   false — replaces all existing resource packs (clearResourcePacks + sendResourcePacks)
-  #   true  — adds this pack alongside any existing packs (sendResourcePacks only)
-  #
-  # Use "true" if players may have other server resource packs loaded simultaneously
-  # (e.g. in a network with multiple pack sources). Requires Minecraft 1.20.3+.
+  # PackMerger sends its pack under one stable UUID per server (derived from
+  # server-name), so sending it again always replaces PackMerger's own pack and never
+  # stacks a second copy. Packs from a proxy or other plugins are never removed
+  # (before 1.3.0, false cleared ALL of the player's server packs).
+  #   false — PackMerger first removes its own previous pack, then sends the new one
+  #   true  — PackMerger only sends; the client swaps its pack in place (same UUID)
   #
   # Valid values: true, false
-  # Default: false (replace existing packs)
+  # Default: false
   use-add-resource-pack: false
 
   # Delay in server ticks (1 tick = 50ms) before sending the pack after a player joins.
@@ -438,24 +514,41 @@ distribution:
   # Default: 20 (1 second)
   join-delay-ticks: 20
 
-  # ---- Player Cache ----
-  cache:
-    # Track which resource pack version each player has downloaded.
-    # When enabled, players who rejoin with the same pack version skip the download
-    # entirely, reducing bandwidth and improving join speed. The cache is stored in
-    # plugins/PackMerger/cache/player-cache.json and persisted every 5 minutes.
+  # The pack is sent on every join. The client drops server packs when it
+  # disconnects, and it caches downloads by SHA-1, so an unchanged pack is applied
+  # from the client's cache without downloading again. (The old "cache" section,
+  # which skipped the send on rejoin and left players without the pack, was removed
+  # in 1.3.0; delete it from older configs.)
+  #
+  # Players who join before the first pack is ready are sent it automatically as
+  # soon as it is published, whatever on-new-pack.action says.
+
+  # ---- Self-heal ----
+  retry:
+    # When a client reports FAILED_DOWNLOAD or DISCARDED for PackMerger's pack, send it
+    # again after delay-ticks, at most max-attempts times per session. INVALID_URL and
+    # FAILED_RELOAD are not retried (a resend can't fix them); a diagnosis is logged.
     #
-    # Disable this if you want every player to re-download the pack on every join
-    # (not recommended for production).
-    #
-    # Valid values: true, false
-    # Default: true
-    enabled: true
+    # Valid values: 0 (off) or more
+    # Default: 3
+    max-attempts: 3
+    # Valid values: 1 or more (1 tick = 50ms)
+    # Default: 40 (2 seconds)
+    delay-ticks: 40
+
+  # Don't send the Java pack to Bedrock players who connect through Geyser + Floodgate
+  # (detected through the Floodgate API when Floodgate is installed; no effect otherwise).
+  #
+  # Valid values: true, false
+  # Default: true
+  skip-bedrock-players: true
 
   # ---- New Pack Behavior ----
   on-new-pack:
     # What to do when a new merged pack is produced while players are already online
-    # (e.g. after a hot-reload or manual /packmerger reload).
+    # (e.g. after a hot-reload or manual /packmerger reload). A re-merge with identical
+    # content produces the same SHA-1 and is not a new pack, so nothing happens.
+    # Players who joined before the first pack existed always get it, whatever this says.
     #
     # Valid values:
     #   "none"   — do nothing; players get the new pack on next join
@@ -514,9 +607,8 @@ validation:
   #
   # Valid values:
   #   "warn"  — log a WARNING but allow the merge (default)
-  #   "error" — log an ERROR (counts toward validation errors, and — once
-  #             validation rollback is enabled in 1.1.0 — prevents shipping the
-  #             broken pack)
+  #   "error" — log an ERROR (counts toward validation errors, so with
+  #             rollback-on-errors the broken pack is not shipped)
   #   "off"   — skip the check entirely
   #
   # The registry of MC version → expected pack_format is maintained inside the
@@ -530,6 +622,8 @@ validation:
   # rollback keeps the previous merged pack live so players continue seeing a
   # working version instead of a broken one. The failed attempt is discarded
   # and a PackValidationFailedEvent fires so other plugins can page someone.
+  # The previous pack stays live across restarts and /pm reload too: on startup
+  # and after a reload the existing output is served again before the next merge.
   #
   # Only kicks in when a previous output actually exists — on the very first
   # merge with a broken pack, there is nothing to roll back to and we ship

@@ -4,6 +4,7 @@ import org.bukkit.Bukkit;
 import sh.pcx.packmerger.PackMergerBootstrap;
 import sh.pcx.packmerger.PluginLogger;
 import sh.pcx.packmerger.config.ConfigManager;
+import sh.pcx.packmerger.merge.DeterministicZip;
 
 import java.io.File;
 import java.io.IOException;
@@ -13,7 +14,6 @@ import java.nio.file.StandardCopyOption;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.stream.Stream;
-import java.util.zip.ZipEntry;
 import java.util.zip.ZipOutputStream;
 
 /**
@@ -24,7 +24,7 @@ import java.util.zip.ZipOutputStream;
  *
  * <p>{@link #stageAll()} is re-run before every merge so a later
  * {@code /oraxen reload} (or any plugin re-emitting its pack) is picked up by the
- * next {@code /pm merge}. Staged packs flow through the format-aware deep-merge
+ * next {@code /pm reload}. Staged packs flow through the format-aware deep-merge
  * strategies; we never bypass them with whole-file overwrite.</p>
  */
 public class PluginPackManager {
@@ -123,7 +123,9 @@ public class PluginPackManager {
 
     /**
      * Zips the contents of {@code dir} (entries relative to {@code dir}, forward
-     * slashes) into {@code destZip}. Package-private + static for testing.
+     * slashes) into {@code destZip}, in sorted order with fixed entry timestamps so
+     * an unchanged directory always stages a byte-identical zip. Package-private +
+     * static for testing.
      */
     static void zipDirectory(File dir, File destZip) throws IOException {
         Path base = dir.toPath();
@@ -132,7 +134,7 @@ public class PluginPackManager {
             List<Path> files = walk.filter(Files::isRegularFile).sorted().toList();
             for (Path p : files) {
                 String entry = base.relativize(p).toString().replace(File.separatorChar, '/');
-                zos.putNextEntry(new ZipEntry(entry));
+                zos.putNextEntry(DeterministicZip.entry(entry));
                 Files.copy(p, zos);
                 zos.closeEntry();
             }

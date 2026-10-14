@@ -36,7 +36,11 @@ public class ConfigManager {
      * so {@link #load()} can surface a one-line notice on older configs (we never
      * rewrite the file, since it carries operator comments).
      */
-    private static final int CURRENT_CONFIG_VERSION = 2;
+    private static final int CURRENT_CONFIG_VERSION = 4;
+
+    /** Default kick message for {@code distribution.enforce-required}. */
+    static final String DEFAULT_KICK_MESSAGE =
+            "<red>This server requires its resource pack.</red> <gray>Rejoin and accept it to play.</gray>";
 
     // -------------------------------------------------------------------------
     // General
@@ -142,7 +146,7 @@ public class ConfigManager {
     // Self-host settings
     // -------------------------------------------------------------------------
 
-    /** Port for the built-in HTTP server (default 8080). */
+    /** Port for the built-in HTTP server (default -1 = Minecraft port + 1). */
     private int selfHostPort;
 
     /** Public URL override for the self-hosted pack. Auto-detected if empty. */
@@ -150,6 +154,24 @@ public class ConfigManager {
 
     /** Maximum concurrent downloads allowed by the self-host server. 0 = unlimited. */
     private int selfHostRateLimit;
+
+    /** Resolved self-host port and any problems with it (range, rcon/query collisions). */
+    private sh.pcx.packmerger.upload.SelfHostPort selfHostPortInfo;
+
+    /** Host name or IP for the auto-built self-host URL; empty = continue down the chain. */
+    private String selfHostPublicHost;
+
+    /** Whether to look up this server's public IP through a third-party service (opt-in). */
+    private boolean selfHostDetectPublicIp;
+
+    /** Services queried, in order, when {@link #selfHostDetectPublicIp} is on. */
+    private List<String> selfHostPublicIpServices;
+
+    /** Whether to verify the self-host URL by downloading part of the pack after each upload. */
+    private boolean selfHostVerify;
+
+    /** Providers tried, in order, when {@code upload.provider} can't be used. */
+    private List<String> uploadFallback;
 
     // -------------------------------------------------------------------------
     // Polymath settings
@@ -178,8 +200,26 @@ public class ConfigManager {
     /** Whether to send the resource pack to players on join. */
     private boolean distributionEnabled;
 
-    /** Whether the resource pack is required (players who decline are kicked). */
+    /** Whether the pack request carries the client's "required" flag. */
     private boolean required;
+
+    /** Whether to kick players who decline (or can't download) a required pack. */
+    private boolean enforceRequired;
+
+    /** MiniMessage kick message used when {@link #enforceRequired} kicks a player. */
+    private String enforceKickMessage;
+
+    /** Resends allowed per session after FAILED_DOWNLOAD / DISCARDED (0 = off). */
+    private int retryMaxAttempts;
+
+    /** Delay in ticks before a self-heal resend. */
+    private int retryDelayTicks;
+
+    /** Whether to skip the Java pack for Floodgate (Bedrock) players. */
+    private boolean skipBedrockPlayers;
+
+    /** The removed distribution.cache notice is logged once per server start, not on every reload. */
+    private boolean cacheNoticeLogged;
 
     /** Custom prompt message shown to players (MiniMessage format). Empty = Minecraft default. */
     private String promptMessage;
@@ -189,9 +229,6 @@ public class ConfigManager {
 
     /** Delay in server ticks before sending the pack after a player joins. */
     private int joinDelayTicks;
-
-    /** Whether to track which players already have the current pack to skip redundant sends. */
-    private boolean cacheEnabled;
 
     /**
      * Action to take when a new pack is produced while players are online.
@@ -346,10 +383,22 @@ public class ConfigManager {
         // Self-host settings. port: -1 (or any non-positive) derives the HTTP
         // port from the Minecraft server port + 1, so operators don't have to
         // pick a free port manually.
-        int rawSelfHostPort = config.getInt("upload.self-host.port", 8080);
-        selfHostPort = rawSelfHostPort > 0 ? rawSelfHostPort : Bukkit.getPort() + 1;
-        selfHostPublicUrl = config.getString("upload.self-host.public-url", "");
+        // The default is -1 since config-version 4 (it was 8080; explicit values are kept).
+        int rawSelfHostPort = config.getInt("upload.self-host.port", -1);
+        selfHostPortInfo = sh.pcx.packmerger.upload.SelfHostPort.resolve(
+                rawSelfHostPort, Bukkit.getPort(), readServerProperties());
+        selfHostPort = selfHostPortInfo.port();
+        selfHostPublicUrl = config.getString("upload.self-host.public-url", "").trim();
         selfHostRateLimit = config.getInt("upload.self-host.rate-limit", 50);
+        selfHostPublicHost = config.getString("upload.self-host.public-host", "").trim();
+        selfHostDetectPublicIp = config.getBoolean("upload.self-host.detect-public-ip", false);
+        selfHostPublicIpServices = config.isList("upload.self-host.public-ip-services")
+                ? config.getStringList("upload.self-host.public-ip-services")
+                : List.of("https://checkip.amazonaws.com", "https://api.ipify.org");
+        selfHostVerify = config.getBoolean("upload.self-host.verify", true);
+        uploadFallback = config.isList("upload.fallback")
+                ? config.getStringList("upload.fallback")
+                : List.of();
 
         // Polymath settings
         polymathServer = config.getString("upload.polymath.server", "");
@@ -377,7 +426,19 @@ public class ConfigManager {
         promptMessage = config.getString("distribution.prompt-message", "");
         useAddResourcePack = config.getBoolean("distribution.use-add-resource-pack", false);
         joinDelayTicks = config.getInt("distribution.join-delay-ticks", 20);
-        cacheEnabled = config.getBoolean("distribution.cache.enabled", true);
+        enforceRequired = config.getBoolean("distribution.enforce-required.enabled", false);
+        enforceKickMessage = config.getString("distribution.enforce-required.kick-message",
+                DEFAULT_KICK_MESSAGE);
+        retryMaxAttempts = Math.max(0, config.getInt("distribution.retry.max-attempts", 3));
+        retryDelayTicks = Math.max(1, config.getInt("distribution.retry.delay-ticks", 40));
+        skipBedrockPlayers = config.getBoolean("distribution.skip-bedrock-players", true);
+        if (!cacheNoticeLogged && config.isSet("distribution.cache")) {
+            cacheNoticeLogged = true;
+            // Removed in 1.3.0 (it kept rejoining players from getting the pack).
+            plugin.getLogger().log(Level.INFO, "distribution.cache is no longer used and can be removed "
+                    + "from config.yml: the pack is now sent on every join, and the client's own "
+                    + "SHA-1 cache already avoids re-downloading an unchanged pack.");
+        }
         onNewPackAction = config.getString("distribution.on-new-pack.action", "notify");
         notifyMessage = config.getString("distribution.on-new-pack.notify-message",
                 "<yellow>[PackMerger]</yellow> <gray>A new resource pack is available. Rejoin or use F3+T to reload.</gray>");
@@ -461,6 +522,20 @@ public class ConfigManager {
      *
      * @return the server name from {@code server.properties}, or {@code "default"} if unreadable
      */
+    /** @return {@code server.properties} from the server root, or empty properties if unreadable */
+    public static Properties readServerProperties() {
+        Properties props = new Properties();
+        File serverProperties = new File("server.properties");
+        if (serverProperties.isFile()) {
+            try (FileInputStream fis = new FileInputStream(serverProperties)) {
+                props.load(fis);
+            } catch (IOException e) {
+                // Empty properties: callers fall back to their defaults.
+            }
+        }
+        return props;
+    }
+
     private String readServerNameFromProperties() {
         File serverProperties = new File("server.properties");
         if (!serverProperties.exists()) return "default";
@@ -604,6 +679,24 @@ public class ConfigManager {
     /** @return the maximum concurrent downloads for the self-host server (0 = unlimited) */
     public int getSelfHostRateLimit() { return selfHostRateLimit; }
 
+    /** @return the resolved self-host port together with any warnings about it */
+    public sh.pcx.packmerger.upload.SelfHostPort getSelfHostPortInfo() { return selfHostPortInfo; }
+
+    /** @return {@code upload.self-host.public-host}, or empty to continue down the host chain */
+    public String getSelfHostPublicHost() { return selfHostPublicHost; }
+
+    /** @return whether the opt-in public IP lookup is enabled */
+    public boolean isSelfHostDetectPublicIp() { return selfHostDetectPublicIp; }
+
+    /** @return the public IP lookup services, in order */
+    public List<String> getSelfHostPublicIpServices() { return selfHostPublicIpServices; }
+
+    /** @return whether the self-host URL is verified after each upload */
+    public boolean isSelfHostVerify() { return selfHostVerify; }
+
+    /** @return {@code upload.fallback}: providers tried in order after {@code upload.provider} */
+    public List<String> getUploadFallback() { return uploadFallback; }
+
     /** @return the Polymath server URL (e.g. "http://atlas.oraxen.com") */
     public String getPolymathServer() { return polymathServer; }
 
@@ -623,8 +716,26 @@ public class ConfigManager {
     /** @return {@code true} if the pack should be sent to players on join */
     public boolean isDistributionEnabled() { return distributionEnabled; }
 
-    /** @return {@code true} if the pack is required (declining kicks the player) */
+    /** @return {@code true} if the pack request carries the client's "required" flag */
     public boolean isRequired() { return required; }
+
+    /**
+     * @return {@code true} if PackMerger itself kicks players who decline a required
+     *         pack or whose download keeps failing (only meaningful with {@link #isRequired()})
+     */
+    public boolean isEnforceRequired() { return enforceRequired; }
+
+    /** @return the MiniMessage kick message used by required-pack enforcement */
+    public String getEnforceKickMessage() { return enforceKickMessage; }
+
+    /** @return resends allowed per session after FAILED_DOWNLOAD / DISCARDED (0 = disabled) */
+    public int getRetryMaxAttempts() { return retryMaxAttempts; }
+
+    /** @return delay in ticks before a self-heal resend */
+    public int getRetryDelayTicks() { return retryDelayTicks; }
+
+    /** @return {@code true} to skip the Java pack for Floodgate (Bedrock) players */
+    public boolean isSkipBedrockPlayers() { return skipBedrockPlayers; }
 
     /** @return the custom MiniMessage prompt text, or empty for Minecraft's default */
     public String getPromptMessage() { return promptMessage; }
@@ -634,9 +745,6 @@ public class ConfigManager {
 
     /** @return delay in ticks before sending the pack after join */
     public int getJoinDelayTicks() { return joinDelayTicks; }
-
-    /** @return {@code true} if the player pack cache is enabled */
-    public boolean isCacheEnabled() { return cacheEnabled; }
 
     /** @return the action to take on new pack: "none", "notify", or "resend" */
     public String getOnNewPackAction() { return onNewPackAction; }

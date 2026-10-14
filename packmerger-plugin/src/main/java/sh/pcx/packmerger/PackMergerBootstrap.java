@@ -22,7 +22,8 @@ import sh.pcx.packmerger.common.PackMessaging;
 import sh.pcx.packmerger.config.ConfigManager;
 import sh.pcx.packmerger.config.MessageManager;
 import sh.pcx.packmerger.distribution.PackDistributor;
-import sh.pcx.packmerger.distribution.PlayerCacheManager;
+import sh.pcx.packmerger.distribution.PackIdentity;
+import sh.pcx.packmerger.distribution.PublishedPack;
 import sh.pcx.packmerger.discovery.PluginPackManager;
 import sh.pcx.packmerger.listeners.PlayerJoinListener;
 import sh.pcx.packmerger.merge.FileWatcher;
@@ -35,6 +36,7 @@ import sh.pcx.packmerger.update.UpdateChecker;
 import sh.pcx.packmerger.upload.PolymathUploadProvider;
 import sh.pcx.packmerger.upload.S3UploadProvider;
 import sh.pcx.packmerger.upload.SelfHostProvider;
+import sh.pcx.packmerger.upload.UploadChain;
 import sh.pcx.packmerger.upload.UploadProvider;
 
 import java.io.File;
@@ -43,12 +45,18 @@ import java.nio.charset.StandardCharsets;
 import java.nio.file.AtomicMoveNotSupportedException;
 import java.nio.file.Files;
 import java.nio.file.StandardCopyOption;
+import java.time.Instant;
 import java.time.LocalDateTime;
 import java.time.format.DateTimeFormatter;
 import java.util.List;
+import java.util.Locale;
+import java.util.Map;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicReference;
+import java.util.concurrent.locks.ReentrantLock;
 import java.util.logging.Logger;
 
 /**
@@ -100,11 +108,17 @@ public class PackMergerBootstrap implements PackMergerApi {
     /** The active upload provider (Polymath or self-host) used to serve the merged pack. */
     private UploadProvider uploadProvider;
 
+    /** Name of {@link #uploadProvider} ("self-host", "s3", "polymath"), after any init fallback. */
+    private volatile String uploadProviderName = "self-host";
+
+    /** Providers from {@code upload.fallback}, created on first use; cleared on re-init. */
+    private final Map<String, UploadProvider> fallbackProviders = new ConcurrentHashMap<>();
+
+    /** How the live pack was published (provider, fallback notes); {@code null} before the first publish. */
+    private volatile UploadChain.Outcome lastUploadOutcome;
+
     /** Handles sending the resource pack to individual players or all online players. */
     private PackDistributor distributor;
-
-    /** Tracks which pack version each player has downloaded to avoid redundant re-sends. */
-    private PlayerCacheManager cacheManager;
 
     /** Fetches remote pack sources into {@code packs/.remote-cache/}. */
     private RemotePackManager remotePackManager;
@@ -115,14 +129,21 @@ public class PackMergerBootstrap implements PackMergerApi {
     /** Checks for newer PackMerger releases on enable. */
     private UpdateChecker updateChecker;
 
-    /** The public download URL of the most recently uploaded merged pack, or {@code null} if no merge has completed. */
-    private String currentPackUrl;
+    /**
+     * The pack currently offered to players: an immutable (url, sha1, uuid) record that
+     * is only replaced, as a whole, after an upload succeeded. {@code null} until the
+     * first publish (re-publish of the existing output on enable, or the first merge).
+     */
+    private final AtomicReference<PublishedPack> publishedPack = new AtomicReference<>();
 
-    /** The raw SHA-1 hash bytes of the current merged pack, used by Minecraft's resource pack protocol. */
-    private byte[] currentPackHash;
+    /** Serialises publishing (merge uploads and re-publishes of the existing output). */
+    private final ReentrantLock publishLock = new ReentrantLock();
 
-    /** Hex-encoded SHA-1 hash of the current merged pack, used for cache comparisons and logging. */
-    private String currentPackHashHex;
+    /**
+     * Incremented each time the upload provider is (re)initialised. A published record
+     * from an older generation must be re-published through the current provider.
+     */
+    private volatile int providerGeneration;
 
     /** Timestamp of the last successful merge, displayed in the status command. */
     private LocalDateTime lastMergeTime;
@@ -164,8 +185,6 @@ public class PackMergerBootstrap implements PackMergerApi {
         // (which silently disables the pack_format drift check).
         logger.debug(sh.pcx.packmerger.merge.PackFormatRegistry.describe()
                 + "; server reports Minecraft " + Bukkit.getMinecraftVersion());
-        cacheManager = new PlayerCacheManager(this);
-        cacheManager.load();
         distributor = new PackDistributor(this);
         remotePackManager = new RemotePackManager(this);
         pluginPackManager = new PluginPackManager(this);
@@ -197,6 +216,11 @@ public class PackMergerBootstrap implements PackMergerApi {
         // Initialize upload provider (may start an HTTP server if using self-host)
         initUploadProvider();
 
+        // Re-publish the merged pack from the previous run right away, so joining
+        // players get a pack immediately instead of waiting for the delayed merge (and
+        // so a first merge that fails validation really leaves the previous pack live).
+        republishExistingAsync("startup");
+
         // Register Brigadier commands via Paper's lifecycle API
         new PackMergerCommand(this);
 
@@ -206,12 +230,6 @@ public class PackMergerBootstrap implements PackMergerApi {
         // Outgoing channel used to relay the current pack URL/hash to a Velocity/
         // Bungee proxy for network-wide distribution (see distribution.proxy-notify).
         Bukkit.getMessenger().registerOutgoingPluginChannel(loader, PackMessaging.CHANNEL);
-
-        // Periodically save the player cache to disk every 5 minutes to prevent
-        // data loss on unclean shutdowns. Uses AsyncScheduler so it works on
-        // both Paper and Folia (BukkitScheduler throws on Folia).
-        Bukkit.getAsyncScheduler().runAtFixedRate(loader, task -> cacheManager.save(),
-                5, 5, TimeUnit.MINUTES);
 
         // bStats metrics (https://bstats.org/plugin/bukkit/PackMerger/32086).
         // Guarded so a scheduler incompatibility (e.g. on Folia) can't fail enable.
@@ -247,15 +265,11 @@ public class PackMergerBootstrap implements PackMergerApi {
         // Stop the file watcher thread first to prevent new merges from starting
         stopFileWatcher();
 
-        // Shut down the built-in HTTP server if self-host is the active provider
+        // Shut down the built-in HTTP server if self-host is the active provider (or a fallback)
         if (uploadProvider instanceof SelfHostProvider selfHost) {
             selfHost.stop();
         }
-
-        // Persist the player cache so it survives restarts
-        if (cacheManager != null) {
-            cacheManager.save();
-        }
+        stopFallbackProviders();
 
         // Cancel any outstanding async tasks (the global-region and entity
         // schedulers auto-cancel on plugin disable, so they don't need
@@ -278,13 +292,28 @@ public class PackMergerBootstrap implements PackMergerApi {
      * @see SelfHostProvider
      */
     public void initUploadProvider() {
-        // Stop existing self-host HTTP server if we're switching providers
+        String provider = configManager.getUploadProvider();
+        // Fallback providers are rebuilt from the (possibly changed) config on first use.
+        // Stopped first, so a fallback self-host releases its port before a primary binds it.
+        stopFallbackProviders();
+
+        // Keep a running self-host server when it stays on the same port, so the URL
+        // that is already advertised keeps answering through /pm reload.
+        if (uploadProvider instanceof SelfHostProvider selfHost
+                && "self-host".equalsIgnoreCase(provider) && selfHost.reconfigure()) {
+            providerGeneration++;
+            uploadProviderName = "self-host";
+            logger.upload("Self-host HTTP server kept running on port " + configManager.getSelfHostPort());
+            return;
+        }
+
+        // Stop existing self-host HTTP server if we're switching providers (or ports)
         if (uploadProvider instanceof SelfHostProvider selfHost) {
             selfHost.stop();
         }
 
-        String provider = configManager.getUploadProvider();
-        uploadProvider = switch (provider.toLowerCase()) {
+        providerGeneration++;
+        uploadProvider = switch (provider.toLowerCase(Locale.ROOT)) {
             case "polymath" -> new PolymathUploadProvider(this);
             case "s3" -> {
                 try {
@@ -309,6 +338,70 @@ public class PackMergerBootstrap implements PackMergerApi {
                 yield selfHost;
             }
         };
+        uploadProviderName = nameOf(uploadProvider);
+    }
+
+    private static String nameOf(UploadProvider provider) {
+        if (provider instanceof SelfHostProvider) return "self-host";
+        if (provider instanceof S3UploadProvider) return "s3";
+        if (provider instanceof PolymathUploadProvider) return "polymath";
+        return provider.getClass().getSimpleName();
+    }
+
+    /** Stops and forgets the fallback providers (their HTTP server, for a self-host fallback). */
+    private void stopFallbackProviders() {
+        for (UploadProvider p : fallbackProviders.values()) {
+            if (p instanceof SelfHostProvider selfHost) selfHost.stop();
+        }
+        fallbackProviders.clear();
+    }
+
+    /**
+     * Returns the provider for a name in the upload chain: the active provider for its own
+     * name, otherwise a fallback created on first use.
+     *
+     * @return the provider, or {@code null} if it is not configured (so the chain skips it)
+     */
+    private UploadProvider providerFor(String name) {
+        if (name.equals(uploadProviderName)) return uploadProvider;
+        UploadProvider existing = fallbackProviders.get(name);
+        if (existing != null) return existing;
+        int generation = providerGeneration;
+        UploadProvider created = switch (name) {
+            case "s3" -> {
+                try {
+                    yield new S3UploadProvider(this);
+                } catch (Exception e) {
+                    logger.debug("Fallback provider s3 is not configured: " + e.getMessage());
+                    yield null;
+                }
+            }
+            case "polymath" -> configManager.getPolymathServer().isBlank() ? null : new PolymathUploadProvider(this);
+            case "self-host" -> {
+                SelfHostProvider selfHost = new SelfHostProvider(this);
+                selfHost.start();
+                yield selfHost.isRunning() ? selfHost : null;
+            }
+            default -> {
+                logger.warning("Unknown provider '" + name + "' in upload.fallback (valid: self-host, s3, polymath)");
+                yield null;
+            }
+        };
+        if (created == null) return null;
+        if (generation != providerGeneration) {
+            // /pm reload re-initialised the providers meanwhile: don't leak this one.
+            if (created instanceof SelfHostProvider selfHost) selfHost.stop();
+            return null;
+        }
+        fallbackProviders.put(name, created);
+        return created;
+    }
+
+    /** Wraps a provider as a chain step; self-host adds its reachability verification. */
+    private static UploadChain.Step stepFor(UploadProvider provider) {
+        if (provider == null) return null;
+        if (provider instanceof UploadChain.Step step) return step;
+        return provider::upload;
     }
 
     /**
@@ -326,8 +419,10 @@ public class PackMergerBootstrap implements PackMergerApi {
      *   <li>Merge all packs via {@link PackMergeEngine#merge()}</li>
      *   <li>Validate the output via {@link PackValidator#validate(File)}</li>
      *   <li>Compute SHA-1 hash for Minecraft's resource pack protocol</li>
-     *   <li>Upload via the configured {@link UploadProvider} (if auto-upload is enabled)</li>
-     *   <li>If the pack changed, notify online players via {@link PackDistributor#onNewPack()}</li>
+     *   <li>Upload via the configured {@link UploadProvider} (if auto-upload is enabled) and,
+     *       only if that succeeds, publish the new (url, sha1, uuid) record</li>
+     *   <li>Send the pack to players who joined before one existed and, if the content
+     *       changed, apply {@code on-new-pack} ({@link PackDistributor#onPublished(boolean)})</li>
      * </ol>
      *
      * @param sender the command sender to receive status messages, or {@code null} for automated merges
@@ -435,14 +530,12 @@ public class PackMergerBootstrap implements PackMergerApi {
                 // Step 3: Compute SHA-1 hash (required by Minecraft's resource pack protocol)
                 byte[] hash = computeSha1(outputFile);
                 String hashHex = bytesToHex(hash);
-
-                // Determine if this merge produced a new pack (different hash than before)
-                boolean isNewPack = currentPackHashHex == null || !currentPackHashHex.equals(hashHex);
-
-                currentPackHash = hash;
-                currentPackHashHex = hashHex;
-
-                logger.info("Merged pack SHA1: " + hashHex);
+                PublishedPack live = publishedPack.get();
+                if (live != null && live.sha1Hex().equals(hashHex)) {
+                    logger.info("Merged pack SHA1: " + hashHex + " (unchanged)");
+                } else {
+                    logger.info("Merged pack SHA1: " + hashHex);
+                }
 
                 // Fire PackMergedEvent before upload so listeners can inspect the
                 // output and validation result before it's shipped.
@@ -451,32 +544,18 @@ public class PackMergerBootstrap implements PackMergerApi {
                 // Convert to a Bedrock pack for Geyser players (opt-in; off by default).
                 convertBedrockIfEnabled(outputFile);
 
-                // Step 4: Upload the merged pack if auto-upload is enabled
+                // Step 4: Upload, then publish the (url, sha1, uuid) record in one step.
+                // Until the upload succeeds, players keep getting the previous record.
                 if (configManager.isAutoUpload()) {
                     try {
-                        String url = uploadProvider.upload(outputFile, hashHex);
-                        currentPackUrl = url;
-                        logger.upload("Pack uploaded successfully: " + url);
-
-                        Bukkit.getPluginManager().callEvent(new PackUploadedEvent(url, hash));
-
-                        // Relay the new URL/hash to a proxy for network-wide distribution.
-                        broadcastPackToProxy(url, hashHex);
-
+                        PublishedPack record = publish(outputFile, hash, false);
                         if (sender != null) {
-                            // Return to main thread for player messaging
                             sender.sendMessage(messageManager.getMessage("merge.upload-complete",
-                                            "url", url));
-                        }
-
-                        // Step 5: If the pack actually changed, handle online players.
-                        // PackDistributor.sendPack() self-schedules on the player's region,
-                        // so onNewPack() is safe to call from the async merge thread.
-                        if (isNewPack) {
-                            distributor.onNewPack();
+                                            "url", record.url()));
                         }
                     } catch (Exception e) {
-                        logger.error("Upload failed", e);
+                        logger.error("Upload failed; players keep getting the previously published pack"
+                                + (publishedPack.get() == null ? " (none yet)" : ""), e);
                         Bukkit.getPluginManager().callEvent(new PackUploadFailedEvent(e));
                         if (sender != null) {
                             sender.sendMessage(messageManager.getMessage("merge.upload-failed",
@@ -497,6 +576,89 @@ public class PackMergerBootstrap implements PackMergerApi {
             } finally {
                 // Always release the merge lock, even on failure
                 merging.set(false);
+            }
+        });
+    }
+
+    /**
+     * Uploads {@code file} through the current provider and, only if that succeeds,
+     * swaps in a new {@link PublishedPack}. Fires {@link PackUploadedEvent}, relays the
+     * pack to the proxy when it changed, and lets the distributor flush players who were
+     * waiting for a pack and apply {@code on-new-pack}.
+     *
+     * @param republish {@code true} when re-publishing an existing output (skipped if a
+     *                  publish through the current provider already happened)
+     * @return the record now live, or {@code null} if a republish was skipped
+     * @throws Exception if the upload failed; the previous record stays live
+     */
+    private PublishedPack publish(File file, byte[] hash, boolean republish) throws Exception {
+        publishLock.lock();
+        try {
+            int generation = providerGeneration;
+            PublishedPack previous = publishedPack.get();
+            if (republish && previous != null && previous.providerGeneration() == generation) {
+                return null; // a merge already published through this provider
+            }
+            String hashHex = bytesToHex(hash);
+            List<String> chain = UploadChain.order(uploadProviderName, configManager.getUploadFallback());
+            UploadChain.Outcome outcome = UploadChain.run(chain, name -> stepFor(providerFor(name)), file, hashHex);
+            lastUploadOutcome = outcome;
+            String url = outcome.url();
+            SelfHostProvider selfHost = getSelfHostProvider();
+            boolean verificationFailed = selfHost != null
+                    && selfHost.getVerification().state() == SelfHostProvider.VerificationState.FAILED;
+            if (outcome.fallback() || (outcome.degraded() && verificationFailed)) {
+                // A non-routable self-host URL alone is already warned about by the provider
+                // (and shown to admins on join); a failed check or a fallback is loud.
+                String problem = "Pack hosting problem: published through " + outcome.describe();
+                logger.warning(problem);
+                alertAdmins("[PackMerger] " + problem + " (see /pm status)");
+            }
+            PublishedPack record = new PublishedPack(url, hash,
+                    PackIdentity.forServer(configManager.getServerName()), Instant.now(), generation);
+            publishedPack.set(record);
+
+            boolean isNewPack = !record.sameContentAs(previous);
+            logger.upload((republish ? "Pack re-published: " : "Pack uploaded successfully: ") + url);
+            Bukkit.getPluginManager().callEvent(new PackUploadedEvent(url, hash));
+            if (previous == null || isNewPack || !previous.url().equals(url)) {
+                // Relay the new URL/hash to a proxy for network-wide distribution.
+                broadcastPackToProxy(url, hashHex);
+            }
+            // PackDistributor self-schedules on each player's region: safe off-thread.
+            distributor.onPublished(isNewPack);
+            return record;
+        } finally {
+            publishLock.unlock();
+        }
+    }
+
+    /**
+     * Re-publishes the merged pack already on disk ({@code output/}) through the
+     * current upload provider, off the main thread. Used on enable and after
+     * {@code /pm reload} so a pack is available immediately and stays available while
+     * the next merge runs; a later merge that fails validation then really leaves the
+     * previous pack live.
+     */
+    public CompletableFuture<Void> republishExistingAsync(String reason) {
+        if (!configManager.isAutoUpload()) return CompletableFuture.completedFuture(null);
+        File output = getOutputFile();
+        return CompletableFuture.runAsync(() -> {
+            if (!output.isFile()) {
+                logger.debug("No previous merged pack to re-publish (" + reason + ")");
+                return;
+            }
+            try {
+                byte[] hash = computeSha1(output);
+                PublishedPack record = publish(output, hash, true);
+                if (record != null) {
+                    logger.info("Re-published the existing merged pack on " + reason + " (SHA1: "
+                            + record.sha1Hex() + ")");
+                }
+            } catch (Exception e) {
+                logger.error("Could not re-publish the existing merged pack on " + reason + ": "
+                        + e.getMessage(), e);
+                Bukkit.getPluginManager().callEvent(new PackUploadFailedEvent(e));
             }
         });
     }
@@ -544,7 +706,11 @@ public class PackMergerBootstrap implements PackMergerApi {
         configManager.load();
         messageManager.load();
         logger.setLevel(configManager.getLogLevel());
+        if (distributor != null) distributor.reloadSettings();
         initUploadProvider();
+        // Re-publish the existing output through the (re)initialised provider before the
+        // re-merge, so the advertised URL keeps serving the current pack meanwhile.
+        republishExistingAsync("reload");
         stopFileWatcher();
         startFileWatcher();
 
@@ -879,9 +1045,6 @@ public class PackMergerBootstrap implements PackMergerApi {
     /** @return the distributor that sends packs to players */
     public PackDistributor getDistributor() { return distributor; }
 
-    /** @return the cache manager tracking which players have the current pack */
-    public PlayerCacheManager getCacheManager() { return cacheManager; }
-
     /** @return the active upload provider */
     public UploadProvider getUploadProvider() { return uploadProvider; }
 
@@ -906,7 +1069,10 @@ public class PackMergerBootstrap implements PackMergerApi {
     public PackMergerApi getApi() { return this; }
 
     @Override
-    public String getCurrentPackSha1Hex() { return currentPackHashHex; }
+    public String getCurrentPackSha1Hex() {
+        PublishedPack pack = publishedPack.get();
+        return pack == null ? null : pack.sha1Hex();
+    }
 
     @Override
     public CompletableFuture<Void> triggerMerge() {
@@ -938,14 +1104,67 @@ public class PackMergerBootstrap implements PackMergerApi {
     // Pack state accessors
     // -------------------------------------------------------------------------
 
-    /** @return the public download URL of the current merged pack, or {@code null} if not yet merged/uploaded */
-    public String getCurrentPackUrl() { return currentPackUrl; }
+    /**
+     * @return the pack currently offered to players (URL, SHA-1 and pack UUID, always
+     *         consistent with each other), or {@code null} if nothing is published yet
+     */
+    public PublishedPack getPublishedPack() { return publishedPack.get(); }
 
-    /** @return the raw SHA-1 hash bytes of the current merged pack, or {@code null} if not yet merged */
-    public byte[] getCurrentPackHash() { return currentPackHash; }
+    /** @return how the live pack was published, or {@code null} before the first publish */
+    public UploadChain.Outcome getLastUploadOutcome() { return lastUploadOutcome; }
 
-    /** @return the hex-encoded SHA-1 hash of the current merged pack, or {@code null} if not yet merged */
-    public String getCurrentPackHashHex() { return currentPackHashHex; }
+    /** @return the name of the active upload provider ("self-host", "s3", "polymath") */
+    public String getUploadProviderName() { return uploadProviderName; }
+
+    /**
+     * @return the self-host provider whose state /pm status reports: the active provider if
+     *         it is self-host, otherwise a self-host fallback that has been started, else {@code null}
+     */
+    public SelfHostProvider getSelfHostProvider() {
+        if (uploadProvider instanceof SelfHostProvider selfHost) return selfHost;
+        return fallbackProviders.get("self-host") instanceof SelfHostProvider selfHost ? selfHost : null;
+    }
+
+    /**
+     * @return a one-paragraph notice for admins when players probably can't download the
+     *         pack (fallback used, verification failed, or a non-routable self-host URL), or
+     *         {@code null} when hosting looks healthy
+     */
+    public String getHostingProblem() {
+        UploadChain.Outcome outcome = lastUploadOutcome;
+        if (outcome == null) return null;
+        if (outcome.fallback()) {
+            return "Pack hosting problem: published through " + outcome.describe();
+        }
+        SelfHostProvider selfHost = getSelfHostProvider();
+        if (selfHost != null && "self-host".equals(outcome.provider())) {
+            if (selfHost.getVerification().state() == SelfHostProvider.VerificationState.FAILED) {
+                return "Self-host verification failed: " + selfHost.getVerification().detail();
+            }
+            if (selfHost.getResolution() != null && !selfHost.getResolution().routable()) {
+                return selfHost.getResolution().advice();
+            }
+        }
+        return outcome.degraded() ? "Pack hosting problem: published through " + outcome.describe() : null;
+    }
+
+    /** Sends a plain message to online players with {@code packmerger.admin} (thread-safe). */
+    public void alertAdmins(String message) {
+        net.kyori.adventure.text.Component text = net.kyori.adventure.text.Component.text(message,
+                net.kyori.adventure.text.format.NamedTextColor.RED);
+        for (org.bukkit.entity.Player p : Bukkit.getOnlinePlayers()) {
+            if (p.hasPermission("packmerger.admin")) p.sendMessage(text);
+        }
+    }
+
+    /** @return the public download URL of the published pack, or {@code null} if none is published */
+    public String getCurrentPackUrl() {
+        PublishedPack pack = publishedPack.get();
+        return pack == null ? null : pack.url();
+    }
+
+    /** @return the hex-encoded SHA-1 of the published pack, or {@code null} if none is published */
+    public String getCurrentPackHashHex() { return getCurrentPackSha1Hex(); }
 
     /** @return the timestamp of the last successful merge, or {@code null} if no merge has occurred */
     public LocalDateTime getLastMergeTime() { return lastMergeTime; }

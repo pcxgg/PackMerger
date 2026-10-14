@@ -15,20 +15,21 @@ import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
 
 /**
- * Listens for player join, quit, and resource pack status events to manage
- * resource pack distribution and cache tracking.
+ * Listens for player join, quit, and resource pack status events to drive
+ * resource pack distribution.
  *
  * <p>On join, schedules a delayed task to send the resource pack (configurable delay
- * to allow the player's client to finish connecting). On quit, cancels any pending
- * send task. On resource pack status changes, updates the player cache and logs
- * the outcome.</p>
+ * to allow the player's client to finish connecting). The pack is sent on every join:
+ * the client drops server packs on disconnect. On quit, cancels any pending send task.
+ * Resource pack status changes are handed to
+ * {@link sh.pcx.packmerger.distribution.PackDistributor#handleStatus} (self-heal
+ * resends, diagnostics, optional enforcement).</p>
  *
  * <p>The pending task map uses a {@link ConcurrentHashMap} because tasks can be
  * scheduled and cancelled from the main thread, but the map itself is accessed
  * from both event handlers and scheduled task callbacks.</p>
  *
  * @see sh.pcx.packmerger.distribution.PackDistributor
- * @see sh.pcx.packmerger.distribution.PlayerCacheManager
  */
 public class PlayerJoinListener implements Listener {
 
@@ -80,6 +81,19 @@ public class PlayerJoinListener implements Listener {
             }
         }
 
+        // Tell admins when players probably can't download the pack (non-routable
+        // self-host URL, failed reachability verification, or a fallback in use).
+        // Sent a few seconds after join so it isn't buried under join/MOTD messages.
+        if (player.hasPermission("packmerger.admin") && plugin.getHostingProblem() != null) {
+            player.getScheduler().runDelayed(plugin.getLoader(), task -> {
+                String hostingProblem = plugin.getHostingProblem();
+                if (hostingProblem != null) {
+                    player.sendMessage(net.kyori.adventure.text.Component.text("[PackMerger] " + hostingProblem,
+                            net.kyori.adventure.text.format.NamedTextColor.RED));
+                }
+            }, null, 40L);
+        }
+
         // Advise admins about installed pack-generating plugins that aren't being
         // merged (e.g. detected but disabled, or no generated pack found yet).
         if (plugin.getPluginPackManager() != null && player.hasPermission("packmerger.admin")) {
@@ -90,6 +104,9 @@ public class PlayerJoinListener implements Listener {
         }
 
         if (!plugin.getConfigManager().isDistributionEnabled()) return;
+
+        // A new client session starts without any server pack.
+        plugin.getDistributor().onJoin(player);
 
         long delay = plugin.getConfigManager().getJoinDelayTicks();
 
@@ -111,35 +128,16 @@ public class PlayerJoinListener implements Listener {
     }
 
     /**
-     * Handles resource pack status updates from the client.
-     *
-     * <p>When a player successfully loads the pack, their cache entry is updated so
-     * they won't be re-sent the same pack on next join. Other statuses are logged
-     * for operator visibility.</p>
+     * Handles resource pack status updates from the client. Reports for other plugins'
+     * packs are ignored; reports for PackMerger's pack drive self-heal resends and
+     * diagnostics (see {@link sh.pcx.packmerger.distribution.PackDistributor#handleStatus}).
      *
      * @param event the resource pack status event
      */
     @EventHandler
     public void onResourcePackStatus(PlayerResourcePackStatusEvent event) {
-        Player player = event.getPlayer();
-        var status = event.getStatus();
-
-        switch (status) {
-            case SUCCESSFULLY_LOADED -> {
-                logger.debug(player.getName() + " successfully loaded the resource pack");
-                // Update the player cache with the current pack hash so they skip
-                // the download on next join
-                String currentHash = plugin.getCurrentPackHashHex();
-                if (currentHash != null) {
-                    plugin.getCacheManager().updateCache(player.getUniqueId(), currentHash);
-                }
-            }
-            case DECLINED -> logger.info(player.getName() + " declined the resource pack");
-            case FAILED_DOWNLOAD -> logger.warning(player.getName() + " failed to download the resource pack");
-            case FAILED_RELOAD -> logger.warning(player.getName() + " failed to reload the resource pack");
-            case ACCEPTED -> logger.debug(player.getName() + " accepted the resource pack");
-            case DOWNLOADED -> logger.debug(player.getName() + " downloaded the resource pack");
-            default -> logger.debug(player.getName() + " resource pack status: " + status);
+        if (plugin.getDistributor() != null) {
+            plugin.getDistributor().handleStatus(event);
         }
     }
 
@@ -157,6 +155,9 @@ public class PlayerJoinListener implements Listener {
         ScheduledTask task = pendingTasks.remove(uuid);
         if (task != null) {
             task.cancel();
+        }
+        if (plugin.getDistributor() != null) {
+            plugin.getDistributor().onQuit(event.getPlayer());
         }
     }
 }

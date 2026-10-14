@@ -33,6 +33,16 @@ public class MessageManager {
             plugin.saveResource("messages_en.yml", false);
         }
         messages = YamlConfiguration.loadConfiguration(file);
+        // Keys added in newer versions fall back to the bundled defaults, so an older
+        // messages_en.yml on disk never shows raw "<key>" placeholders.
+        try (java.io.InputStream in = plugin.getLoader().getResource("messages_en.yml")) {
+            if (in != null) {
+                messages.setDefaults(YamlConfiguration.loadConfiguration(
+                        new java.io.InputStreamReader(in, java.nio.charset.StandardCharsets.UTF_8)));
+            }
+        } catch (java.io.IOException e) {
+            // No defaults: missing keys render as their name, as before.
+        }
     }
 
     /**

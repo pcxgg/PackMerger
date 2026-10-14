@@ -60,7 +60,8 @@ test('/pm reload reloads the config and re-merges', async ({ player, server }) =
   await expect(player).toHaveReceivedMessage('Reloading PackMerger...');
   await expect(player).toHaveReceivedMessage('Starting merge process...');
   await expect(player).toHaveReceivedMessage(`Merge and upload complete! URL: ${PACK_URL}`, { timeout: 15_000 });
-  await expect(server).toHaveReceivedMessage(`Self-host HTTP server started on port ${SELF_HOST_PORT}`);
+  // The HTTP server is kept (not restarted) so the advertised URL never stops answering.
+  await expect(server).toHaveReceivedMessage(`Self-host HTTP server kept running on port ${SELF_HOST_PORT}`);
   await expect(server).toHaveReceivedMessage('Merge order (highest priority first): [overlay-pack, base-pack]');
   await expect(server).not.toHaveReceivedMessage(/\[PackMerger\].*\[ERROR\]|Exception/);
 

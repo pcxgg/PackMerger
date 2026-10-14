@@ -1,7 +1,7 @@
 # PackMerger config for the plugwright E2E server. Staged into
 # plugins/PackMerger/config.yml before every run. Everything that would reach
 # the internet (update check, remote packs, plugin-pack discovery) is off.
-config-version: 2
+config-version: 4
 server-name: "e2e"
 priority:
   - "overlay-pack"
@@ -9,7 +9,9 @@ priority:
 remote-packs: {}
 plugin-packs:
   enabled: false
-  merge-delay-seconds: 0
+  # Delays the startup merge so distribution.spec's first bot joins before any pack exists.
+  # build.gradle rewrites this to 0 for filtered runs that don't include distribution.spec.
+  merge-delay-seconds: 15
 # Profiles are defined but none is active, so the root-level priority applies.
 active-profile: ""
 profiles:
@@ -46,8 +48,13 @@ distribution:
   use-add-resource-pack: false
   # 3 s, so a freshly connected bot has its resourcePack listener attached first.
   join-delay-ticks: 60
-  cache:
-    enabled: true
+  enforce-required:
+    enabled: false
+    kick-message: "<red>This server requires its resource pack.</red> <gray>Rejoin and accept it to play.</gray>"
+  retry:
+    max-attempts: 3
+    delay-ticks: 40
+  skip-bedrock-players: true
   on-new-pack:
     action: "notify"
     notify-message: "<yellow>[PackMerger]</yellow> <gray>A new resource pack is available. Rejoin or use F3+T to reload.</gray>"

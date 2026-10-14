@@ -224,6 +224,7 @@ public class PackMergerCommand {
         String url = plugin.getCurrentPackUrl();
         sender.sendMessage(msg.getMessage("status.pack-url",
                 "url", url != null ? url : "N/A"));
+        sendHostingStatus(sender, msg);
 
         String hash = plugin.getCurrentPackHashHex();
         sender.sendMessage(msg.getMessage("status.sha1",
@@ -260,6 +261,41 @@ public class PackMergerCommand {
         }
 
         return 1;
+    }
+
+    /**
+     * The hosting part of {@code /pm status}: which provider published the live pack (and
+     * why a fallback was used), and for self-host the port, the resolved host with the
+     * setting to change when it is not routable, and the last reachability verification.
+     */
+    private void sendHostingStatus(CommandSender sender, MessageManager msg) {
+        sh.pcx.packmerger.upload.UploadChain.Outcome outcome = plugin.getLastUploadOutcome();
+        sender.sendMessage(msg.getMessage("status.hosting-route",
+                "route", outcome != null ? outcome.describe() : "nothing published yet"));
+
+        sh.pcx.packmerger.upload.SelfHostProvider selfHost = plugin.getSelfHostProvider();
+        if (selfHost == null) return;
+        sender.sendMessage(msg.getMessage("status.self-host",
+                "port", String.valueOf(selfHost.getBoundPort()),
+                "state", selfHost.isRunning() ? "listening" : "NOT listening (port could not be bound)"));
+        sh.pcx.packmerger.upload.SelfHostAddress.Resolution resolution = selfHost.getResolution();
+        if (resolution != null) {
+            sender.sendMessage(msg.getMessage("status.resolved-host",
+                    "host", resolution.host(), "source", resolution.source().description()));
+            if (!resolution.routable()) {
+                sender.sendMessage(msg.getMessage("status.host-not-routable", "advice", resolution.advice()));
+            }
+        }
+        sh.pcx.packmerger.upload.SelfHostProvider.Verification v = selfHost.getVerification();
+        String time = java.time.LocalTime.ofInstant(v.at(), java.time.ZoneId.systemDefault())
+                .truncatedTo(java.time.temporal.ChronoUnit.SECONDS).toString();
+        String key = switch (v.state()) {
+            case PASSED -> "status.verification-passed";
+            case FAILED -> "status.verification-failed";
+            case SKIPPED -> "status.verification-skipped";
+            case PENDING -> "status.verification-pending";
+        };
+        sender.sendMessage(msg.getMessage(key, "detail", v.detail(), "time", time));
     }
 
     /**

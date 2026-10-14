@@ -99,10 +99,38 @@ export function nextResourcePackOffer(bot: any, timeoutMs = 10_000): Promise<Res
   });
 }
 
-/** Answers a resource-pack offer the way a vanilla client does (status ids per the protocol). */
-export function answerResourcePack(bot: any, uuid: string, result: 'accepted' | 'loaded' | 'declined'): void {
-  const ids = { loaded: 0, declined: 1, accepted: 3 } as const;
-  bot._client.write('resource_pack_receive', { uuid, result: ids[result] });
+/** Resource-pack status ids, per the protocol (and Bukkit's PlayerResourcePackStatusEvent.Status order). */
+const PACK_STATUS = {
+  loaded: 0, declined: 1, failed_download: 2, accepted: 3,
+  downloaded: 4, invalid_url: 5, failed_reload: 6, discarded: 7,
+} as const;
+export type PackStatus = keyof typeof PACK_STATUS;
+
+/** Answers a resource-pack offer the way a vanilla client does. */
+export function answerResourcePack(bot: any, uuid: string, result: PackStatus): void {
+  bot._client.write('resource_pack_receive', { uuid, result: PACK_STATUS[result] });
+}
+
+/** Resolves 'offered' if a resource-pack offer arrives within ms, otherwise 'not offered'. */
+export function offeredWithin(bot: any, ms: number): Promise<'offered' | 'not offered'> {
+  return nextResourcePackOffer(bot, ms).then(() => 'offered' as const, () => 'not offered' as const);
+}
+
+/**
+ * The pack UUID PackMerger uses for a server: Java's
+ * UUID.nameUUIDFromBytes(("packmerger:" + serverName).getBytes(UTF_8)), i.e. an MD5 name-based (v3) UUID.
+ */
+export function packUuidForServer(serverName: string): string {
+  const md5 = createHash('md5').update(`packmerger:${serverName}`, 'utf8').digest();
+  md5[6] = (md5[6] & 0x0f) | 0x30;
+  md5[8] = (md5[8] & 0x3f) | 0x80;
+  const hex = md5.toString('hex');
+  return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20)}`;
+}
+
+/** Current end of the shared server log, for `{ since }` on server assertions made mid-test. */
+export function serverLogMark(server: any): number {
+  return server.session.consoleLog.length;
 }
 
 /**
