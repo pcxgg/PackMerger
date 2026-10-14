@@ -125,6 +125,11 @@ public class PackMergeEngine {
      *         produced no files
      * @throws IOException if reading source packs or writing the output zip fails
      */
+    /** @return the format-aware JSON strategies, in match order (shared with cluster staging) */
+    public List<MergeStrategy> getMergeStrategies() {
+        return mergeStrategies;
+    }
+
     public File merge() throws IOException {
         return merge(null);
     }

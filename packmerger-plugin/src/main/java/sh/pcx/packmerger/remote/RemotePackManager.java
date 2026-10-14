@@ -101,19 +101,28 @@ public class RemotePackManager {
      * return early when the origin hasn't changed.
      */
     public FetchResult fetch(RemoteSpec spec) {
+        return fetchInto(spec, cacheDir());
+    }
+
+    /**
+     * Same as {@link #fetch(RemoteSpec)} but downloads into {@code dir/<alias>.zip}
+     * (with its {@code <alias>.meta.json} sidecar). Used by plugin-pack discovery to
+     * stage URL-published plugin packs into {@code packs/.plugin-packs/}.
+     */
+    public FetchResult fetchInto(RemoteSpec spec, File dir) {
+        dir.mkdirs();
         String resolvedUrl = substituteEnv(spec.url());
+        File cacheFile = new File(dir, spec.alias() + ".zip");
+        File metaFile = new File(dir, spec.alias() + ".meta.json");
 
         // HTTPS guard — overridden only when allow-http is explicitly set
         if (resolvedUrl.startsWith("http://") && !spec.allowHttp()) {
             String msg = "refusing plain-HTTP URL (set allow-http: true to opt in): " + resolvedUrl;
             logger.warning("[remote] " + msg);
-            File cached = cacheFile(spec.alias());
             return new FetchResult(spec.alias(),
-                    cached.isFile() ? FetchResult.Status.ERROR_USING_CACHE : FetchResult.Status.ERROR_NO_CACHE, msg);
+                    cacheFile.isFile() ? FetchResult.Status.ERROR_USING_CACHE : FetchResult.Status.ERROR_NO_CACHE, msg);
         }
 
-        File cacheFile = cacheFile(spec.alias());
-        File metaFile = metaFile(spec.alias());
         CachedMeta meta = loadMeta(metaFile);
 
         HttpRequest.Builder req = HttpRequest.newBuilder()
@@ -140,7 +149,7 @@ public class RemotePackManager {
             }
 
             // Write to a temp file then atomic-rename so a torn download doesn't corrupt cache
-            File tmp = new File(cacheDir(), spec.alias() + ".zip.part");
+            File tmp = new File(dir, spec.alias() + ".zip.part");
             Files.write(tmp.toPath(), resp.body());
             Files.move(tmp.toPath(), cacheFile.toPath(), StandardCopyOption.REPLACE_EXISTING);
 
@@ -162,6 +171,24 @@ public class RemotePackManager {
                     cacheFile.isFile() ? FetchResult.Status.ERROR_USING_CACHE : FetchResult.Status.ERROR_NO_CACHE,
                     msg);
         }
+    }
+
+    /**
+     * Deletes cached downloads in {@code packs/.remote-cache/} whose alias is no
+     * longer declared under {@code remote-packs:}, so a removed remote pack stops
+     * being merged.
+     *
+     * @return the aliases whose cached zip was deleted
+     */
+    public List<String> pruneUndeclared(List<RemoteSpec> declared) {
+        if (!cacheDir.isDirectory()) return List.of();
+        java.util.Set<String> keep = new java.util.HashSet<>();
+        for (RemoteSpec spec : declared) keep.add(spec.alias());
+        List<String> pruned = sh.pcx.packmerger.discovery.PluginPackStager.prune(cacheDir, keep);
+        for (String alias : pruned) {
+            logger.remote("removed cached pack '" + alias + "' (no longer declared in remote-packs)");
+        }
+        return pruned;
     }
 
     private void applyAuth(HttpRequest.Builder req, RemoteSpec.AuthSpec auth) {
@@ -202,10 +229,6 @@ public class RemotePackManager {
         }
         m.appendTail(out);
         return out.toString();
-    }
-
-    private File metaFile(String alias) {
-        return new File(cacheDir(), alias + ".meta.json");
     }
 
     /**

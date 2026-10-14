@@ -169,6 +169,7 @@ public class PackMergerBootstrap implements PackMergerApi {
         distributor = new PackDistributor(this);
         remotePackManager = new RemotePackManager(this);
         pluginPackManager = new PluginPackManager(this);
+        pluginPackManager.reconfigure();
         updateChecker = new UpdateChecker(this);
 
         // Poll versions.json off the main thread so a slow GitHub response
@@ -241,11 +242,19 @@ public class PackMergerBootstrap implements PackMergerApi {
 
         // Start watching for file changes in the packs folder (hot-reload)
         startFileWatcher();
+
+        // Poll the resolved plugin pack sources so a plugin rebuilding its pack
+        // (e.g. /oraxen reload) triggers a merge on its own. The watcher ignores
+        // sources until the first staging pass has seen them.
+        pluginPackManager.startWatcher();
     }
 
     public void onDisable(JavaPlugin loader) {
-        // Stop the file watcher thread first to prevent new merges from starting
+        // Stop the file watchers first to prevent new merges from starting
         stopFileWatcher();
+        if (pluginPackManager != null) {
+            pluginPackManager.stopWatcher();
+        }
 
         // Shut down the built-in HTTP server if self-host is the active provider
         if (uploadProvider instanceof SelfHostProvider selfHost) {
@@ -363,6 +372,11 @@ public class PackMergerBootstrap implements PackMergerApi {
                 // Re-run on every merge so fresh plugin output is always captured.
                 if (pluginPackManager != null) {
                     pluginPackManager.stageAll();
+                }
+                // Drop cached downloads of remote packs that are no longer declared,
+                // so removing a remote-packs entry actually removes the pack.
+                if (remotePackManager != null) {
+                    remotePackManager.pruneUndeclared(configManager.getRemotePacks());
                 }
 
                 File mergedTemp = mergeEngine.merge(tempOutputFile);
@@ -547,6 +561,10 @@ public class PackMergerBootstrap implements PackMergerApi {
         initUploadProvider();
         stopFileWatcher();
         startFileWatcher();
+        if (pluginPackManager != null) {
+            pluginPackManager.reconfigure();
+            pluginPackManager.startWatcher();
+        }
 
         if (remotePackManager != null && !configManager.getRemotePacks().isEmpty()) {
             List<FetchResult> results = remotePackManager.fetchAll(
